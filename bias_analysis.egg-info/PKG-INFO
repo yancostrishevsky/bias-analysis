@@ -1,0 +1,133 @@
+Metadata-Version: 2.4
+Name: bias-analysis
+Version: 0.1.0
+Summary: FastAPI backend for scholarly retrieval bias analysis and OpenRouter-based LLM audits.
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+Requires-Dist: fastapi<1.0,>=0.115
+Requires-Dist: uvicorn[standard]<1.0,>=0.30
+Requires-Dist: pydantic<3.0,>=2.8
+Requires-Dist: sqlalchemy<3.0,>=2.0
+Requires-Dist: alembic<2.0,>=1.13
+Requires-Dist: httpx<1.0,>=0.27
+Requires-Dist: tenacity<10.0,>=8.2
+Provides-Extra: dev
+Requires-Dist: pytest<10,>=8; extra == "dev"
+
+# Bias Analysis Web App
+
+Local Angular + FastAPI application for retrieval bias analysis across scholarly search results and OpenRouter-backed LLM article recommendation runs.
+
+## Current Scope
+
+The rewrite now supports two persisted run modes:
+
+- `scholarly`
+  Query OpenAlex, persist ranked results, enrich them through the configured provider chain, and expose source-aware bias analysis in the run detail view.
+- `llm_audit`
+  Query one or more user-selected OpenRouter models per query, parse structured article recommendations, enrich those recommendations through the same metadata chain, and compare model behavior side by side.
+
+Key implemented capabilities:
+
+- SQLite-backed persistence for runs, queries, sources, models, LLM calls, result rows, enrichment records, canonical enrichments, and provider cache entries
+- Config-driven enrichment provider ordering and enablement
+- Multi-provider enrichment via `openalex`, `semantic_scholar`, `scopus`, and `core`
+- OpenRouter client integration with per-model execution and partial-failure handling
+- Interactive run detail analysis inspired by the legacy HTML report:
+  summary cards, distributions, missingness/coverage, top-k vs overall, concentration, overlap, ranking correlation, LLM verification and parsing panels, and provenance inspection
+
+## Repository Layout
+
+- `backend/`
+  FastAPI API, application services, domain models, adapters, SQLite storage, and migration SQL
+- `frontend/`
+  Angular application for run creation, run listing, and analytical run detail views
+- `data/`
+  Default SQLite database location
+- `tests/`
+  Backend-focused regression tests for parsing, enrichment canonicalization, API contracts, and analysis
+
+## Backend API
+
+Main run endpoints:
+
+- `GET /runs/options`
+- `POST /runs`
+- `GET /runs`
+- `GET /runs/{id}`
+- `POST /runs/{id}/start`
+- `GET /runs/{id}/results`
+- `GET /runs/{id}/enrichments`
+- `GET /runs/{id}/analysis`
+
+`POST /runs` accepts:
+
+- `run_type`
+- `queries`
+- `top_k`
+- `sources` for `scholarly`
+- `selected_models` for `llm_audit`
+
+## Configuration
+
+The backend loads the repo-root `.env` automatically on startup. Start from [`.env.example`](.env.example).
+
+Important variables:
+
+- `DATABASE_PATH`
+- `ENRICHMENT_PROVIDER_ORDER`
+- `ENRICHMENT_ENABLED_PROVIDERS`
+- `OPENROUTER_API_KEY`
+- `OPENROUTER_AVAILABLE_MODELS`
+- `OPENROUTER_DEFAULT_MODELS`
+- `OPENALEX_API_KEY`
+- `SEMANTIC_SCHOLAR_API_KEY`
+- `SCOPUS_API_KEY`
+- `SCOPUS_INSTTOKEN`
+- `CORE_API_KEY`
+
+Provider behavior:
+
+- The provider chain is ordered by `ENRICHMENT_PROVIDER_ORDER`.
+- Disabled or unconfigured providers are skipped without failing the whole run.
+- Provider lookups are cached in SQLite through `provider_cache`.
+- Canonical enrichments preserve per-field provenance including provider and match strategy.
+
+## Local Development
+
+Backend:
+
+```bash
+python3 -m uvicorn backend.main:app --reload
+```
+
+Frontend:
+
+```bash
+cd frontend
+npm install
+npm start
+```
+
+The Angular app proxies `/api` to `http://localhost:8000`.
+
+## Tests And Validation
+
+Backend tests:
+
+```bash
+python3 -m pytest
+```
+
+Frontend build validation:
+
+```bash
+cd frontend
+npm run build
+```
+
+## Notes
+
+- Scholarly collection is still centered on OpenAlex in this phase. Semantic Scholar, Scopus, and CORE are enrichment providers, not user-selectable collection sources.
+- The OpenRouter model catalog is backend-configured. The frontend does not hardcode model names.
+- Analysis is computed on demand from persisted run facts instead of stored metric snapshots.

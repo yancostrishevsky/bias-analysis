@@ -1,0 +1,2 @@
+"""OpenAlex adapter package."""
+

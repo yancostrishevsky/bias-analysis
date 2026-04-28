@@ -1,0 +1,10 @@
+fastapi<1.0,>=0.115
+uvicorn[standard]<1.0,>=0.30
+pydantic<3.0,>=2.8
+sqlalchemy<3.0,>=2.0
+alembic<2.0,>=1.13
+httpx<1.0,>=0.27
+tenacity<10.0,>=8.2
+
+[dev]
+pytest<10,>=8
