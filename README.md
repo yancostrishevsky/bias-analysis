@@ -62,8 +62,14 @@ The backend loads the repo-root `.env` automatically on startup. Start from [`.e
 
 Important variables:
 
+- `APP_ENV`
+- `HOST`
+- `PORT`
+- `LOG_LEVEL`
+- `CORS_ALLOWED_ORIGINS`
 - `DATABASE_PATH`
 - `RUN_ARTIFACTS_DIR`
+- `ARTIFACTS_DIR`
 - `RUN_ARTIFACTS_ENABLED`
 - `RUN_ARTIFACTS_PRETTY_JSON`
 - `SCHOLARLY_SOURCES`
@@ -122,6 +128,8 @@ npm start
 ```
 
 The Angular app proxies `/api` to `http://localhost:8000`.
+
+For Railway deployment, see [docs/deployment-railway.md](docs/deployment-railway.md).
 
 ## Tests And Validation
 

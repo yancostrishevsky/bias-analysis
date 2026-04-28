@@ -11,6 +11,7 @@ from backend.storage.repository import Repository
 
 @pytest.fixture(autouse=True)
 def configured_environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr("backend.config.DEFAULT_ENV_PATH", tmp_path / ".env.test")
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-openrouter-key")
     monkeypatch.setenv("OPENROUTER_AVAILABLE_MODELS", "model-a,model-b")
     monkeypatch.setenv("OPENROUTER_DEFAULT_MODELS", "model-a,model-b")

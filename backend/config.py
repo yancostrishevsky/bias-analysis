@@ -176,7 +176,7 @@ class OpenRouterSettings(SettingsModel):
 class DatabaseSettings(SettingsModel):
     """SQLite persistence settings."""
 
-    path: Path = Field(default=REPO_ROOT / "data" / "bias_analysis.sqlite3")
+    path: Path = Field(default=REPO_ROOT / "data" / "app.db")
 
 
 class RunArtifactsSettings(SettingsModel):
@@ -190,6 +190,11 @@ class RunArtifactsSettings(SettingsModel):
 class AppSettings(SettingsModel):
     """Top-level application settings."""
 
+    app_env: str = "development"
+    host: str = "0.0.0.0"
+    port: int = 8000
+    log_level: str = "info"
+    cors_allowed_origins: list[str] = Field(default_factory=list)
     database: DatabaseSettings
     run_artifacts: RunArtifactsSettings
     scholarly_sources: list[str] = Field(default_factory=lambda: ["openalex"])
@@ -320,6 +325,10 @@ _DEFAULT_OPENROUTER_DEFAULT_MODELS = [
     "google/gemini-2.5-flash",
     "anthropic/claude-haiku-4.5",
 ]
+_LOCAL_DEV_CORS_ALLOWED_ORIGINS = [
+    "http://localhost:4200",
+    "http://127.0.0.1:4200",
+]
 
 
 def _build_openrouter_settings() -> OpenRouterSettings:
@@ -386,6 +395,18 @@ def _build_openrouter_settings() -> OpenRouterSettings:
         app_name=os.getenv("OPENROUTER_APP_NAME", "bias-analysis").strip() or "bias-analysis",
         site_url=os.getenv("OPENROUTER_SITE_URL", "").strip() or None,
     )
+
+
+def _default_data_root(app_env: str) -> Path:
+    if app_env == "production":
+        return Path("/data")
+    return REPO_ROOT / "data"
+
+
+def _default_cors_allowed_origins(app_env: str) -> list[str]:
+    if app_env == "production":
+        return []
+    return list(_LOCAL_DEV_CORS_ALLOWED_ORIGINS)
 
 
 def _build_openrouter_model_catalog(
@@ -515,6 +536,8 @@ def get_settings() -> AppSettings:
     """Return the singleton application settings."""
 
     load_env_file()
+    app_env = os.getenv("APP_ENV", "development").strip().lower() or "development"
+    default_data_root = _default_data_root(app_env)
 
     scholarly_sources = _split_csv(
         os.getenv("SCHOLARLY_SOURCES"),
@@ -580,15 +603,26 @@ def get_settings() -> AppSettings:
     )
 
     return AppSettings(
+        app_env=app_env,
+        host=os.getenv("HOST", "0.0.0.0").strip() or "0.0.0.0",
+        port=_int_from_env("PORT", default=8000),
+        log_level=os.getenv("LOG_LEVEL", "info").strip().lower() or "info",
+        cors_allowed_origins=_split_csv(
+            os.getenv("CORS_ALLOWED_ORIGINS"),
+            default=_default_cors_allowed_origins(app_env),
+        ),
         database=DatabaseSettings(
             path=Path(
-                os.getenv("DATABASE_PATH", str(REPO_ROOT / "data" / "bias_analysis.sqlite3"))
+                os.getenv("DATABASE_PATH", str(default_data_root / "app.db"))
             ),
         ),
         run_artifacts=RunArtifactsSettings(
             enabled=_bool_from_env("RUN_ARTIFACTS_ENABLED", default=True),
             path=Path(
-                os.getenv("RUN_ARTIFACTS_DIR", str(REPO_ROOT / "data" / "run_artifacts"))
+                os.getenv(
+                    "RUN_ARTIFACTS_DIR",
+                    os.getenv("ARTIFACTS_DIR", str(default_data_root / "run_artifacts")),
+                )
             ),
             pretty_json=_bool_from_env("RUN_ARTIFACTS_PRETTY_JSON", default=True),
         ),
