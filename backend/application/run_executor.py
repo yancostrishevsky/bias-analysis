@@ -102,6 +102,10 @@ class UnsupportedArtifactReplayError(ValueError):
     """Raised when a run cannot be replayed from stored artifacts."""
 
 
+class UnsupportedModelRetryError(ValueError):
+    """Raised when a targeted LLM model retry is not valid for the run state."""
+
+
 class OpenAlexSourceCollector:
     """Collection adapter for OpenAlex."""
 
@@ -1948,6 +1952,566 @@ def _replay_llm_audit_run_from_artifacts(
         external_llm_calls=0,
     )
     return replayed_run
+
+
+def retry_llm_model(
+    *,
+    repository: Repository,
+    run: Run,
+    queries: Sequence[Query],
+    model_name: str,
+    openrouter_model_catalog: OpenRouterModelCatalogSnapshot | None = None,
+) -> Run:
+    """Retry only missing or failed query executions for one model in an llm_audit run."""
+
+    if run.run_type != RunType.LLM_AUDIT:
+        raise UnsupportedModelRetryError("Model retry is only supported for llm_audit runs")
+    if run.status == RunStatus.RUNNING:
+        raise UnsupportedModelRetryError(f"Run {run.id} cannot retry a model while the run is running")
+    if model_name not in run.selected_models:
+        raise UnsupportedModelRetryError(f"Model {model_name} does not belong to run {run.id}")
+
+    artifacts = get_run_artifacts_writer(run.id)
+    latest_calls = repository.list_latest_llm_calls_for_model(run.id, model_name)
+    result_query_ids = {
+        result.query_id
+        for result in repository.list_results(run.id)
+        if result.model_name == model_name and result.origin_type == ResultOriginType.LLM_RESPONSE
+    }
+    target_queries = [
+        query
+        for query in queries
+        if (
+            query.id not in latest_calls
+            or latest_calls[query.id].status != ExecutionStatus.COMPLETED
+            or query.id not in result_query_ids
+        )
+    ]
+    if not target_queries:
+        artifacts.append_event(
+            stage="retry",
+            message="Model retry skipped because no failed or missing queries were found",
+            model=model_name,
+        )
+        return repository.get_run(run.id)
+
+    try:
+        catalog = openrouter_model_catalog or load_openrouter_model_catalog_snapshot(repository=repository)
+    except OpenRouterModelDiscoveryError as exc:
+        message = "Unable to validate the current OpenRouter model catalog before retry."
+        artifacts.append_error(
+            stage="retry",
+            message=message,
+            model=model_name,
+            error_type=type(exc).__name__,
+            status_code=exc.status_code,
+        )
+        raise UnsupportedModelRetryError(message) from exc
+
+    attempt = artifacts.next_retry_attempt_number(model_name)
+    started_at = datetime.now(timezone.utc)
+    query_positions = {query.id: index for index, query in enumerate(queries, start=1)}
+    settings = get_settings().openrouter
+    request_builder = OpenRouterClient(
+        api_key=settings.api_key or "missing-openrouter-api-key",
+        base_url=settings.base_url.rstrip("/"),
+        app_name=settings.app_name,
+        site_url=settings.site_url,
+    )
+    skip_details = _preflight_model_skip_details(model_name=model_name, catalog=catalog)
+    client: OpenRouterClient | None = None
+    if skip_details is None:
+        try:
+            client = OpenRouterClient.from_settings()
+        except OpenRouterError as exc:
+            artifacts.append_error(stage="retry", message=str(exc), model=model_name)
+            raise UnsupportedModelRetryError(str(exc)) from exc
+
+    completed_calls = 0
+    failed_calls = 0
+    skipped_calls = 0
+    retry_results: list[ResultRecord] = []
+    errors: list[str] = []
+    completed_existing = sum(
+        1
+        for query in queries
+        if query.id in latest_calls
+        and latest_calls[query.id].status == ExecutionStatus.COMPLETED
+        and query.id in result_query_ids
+    )
+    total_queries = max(len(queries), 1)
+
+    _update_run_model_state(
+        repository=repository,
+        run_id=run.id,
+        model_name=model_name,
+        status=ExecutionStatus.RUNNING,
+        progress_current=completed_existing,
+        progress_total=total_queries,
+        progress_message=f"Retrying 0/{len(target_queries)} failed or missing queries",
+        started_at=started_at,
+        finished_at=None,
+        error_message="",
+    )
+    artifacts.append_event(
+        stage="retry",
+        message="Targeted model retry started",
+        model=model_name,
+        attempt=attempt,
+        query_count=len(target_queries),
+        retried_queries=[{"id": str(query.id), "position": query.position, "text": query.text} for query in target_queries],
+    )
+
+    for retry_index, query in enumerate(target_queries, start=1):
+        query_index = query_positions[query.id]
+        prompt = build_article_retrieval_prompt(query_text=query.text, top_k=run.top_k)
+        request = request_builder.build_completion_request(
+            model=model_name,
+            prompt=prompt,
+            max_tokens=settings.max_tokens,
+            temperature=settings.temperature,
+            top_p=settings.top_p,
+            require_json=True,
+        )
+        artifacts.write_retry_request(
+            model_name=model_name,
+            attempt=attempt,
+            query_index=query_index,
+            request=asdict(request),
+        )
+        artifacts.write_llm_request(query_index=query_index, model_name=model_name, request=asdict(request))
+
+        blocked_reason = str(skip_details["reason"]) if skip_details is not None else None
+        if blocked_reason is not None:
+            skipped_at = datetime.now(timezone.utc)
+            skipped_calls += 1
+            failed_calls += 1
+            llm_call = LLMCall(
+                run_id=run.id,
+                query_id=query.id,
+                model_name=model_name,
+                provider_name="openrouter",
+                status=ExecutionStatus.SKIPPED,
+                prompt_text=prompt,
+                request_payload=request.payload,
+                parse_success=False,
+                parse_error=blocked_reason,
+                error_message=blocked_reason,
+                started_at=skipped_at,
+                finished_at=skipped_at,
+            )
+            repository.save_llm_call(llm_call)
+            metadata = {
+                "status": ExecutionStatus.SKIPPED.value,
+                "attempt": attempt,
+                "started_at": skipped_at,
+                "finished_at": skipped_at,
+                "error_message": blocked_reason,
+                "failure_kind": skip_details.get("failure_kind") if skip_details else "skipped",
+            }
+            artifacts.write_retry_parse_error(
+                model_name=model_name,
+                attempt=attempt,
+                query_index=query_index,
+                error_message=blocked_reason,
+            )
+            artifacts.write_retry_metadata(
+                model_name=model_name,
+                attempt=attempt,
+                query_index=query_index,
+                metadata=metadata,
+            )
+            artifacts.write_llm_parse_error(
+                query_index=query_index,
+                model_name=model_name,
+                error_message=blocked_reason,
+            )
+            artifacts.write_llm_metadata(query_index=query_index, model_name=model_name, metadata=metadata)
+            errors.append(blocked_reason)
+        else:
+            assert client is not None
+            llm_call = LLMCall(
+                run_id=run.id,
+                query_id=query.id,
+                model_name=model_name,
+                provider_name="openrouter",
+                status=ExecutionStatus.RUNNING,
+                prompt_text=prompt,
+                request_payload=request.payload,
+                started_at=datetime.now(timezone.utc),
+            )
+            repository.save_llm_call(llm_call)
+            artifacts.append_event(
+                stage="retry",
+                message="Retry request sent",
+                model=model_name,
+                attempt=attempt,
+                query_index=query_index,
+                query_text=query.text,
+            )
+            try:
+                completion = client.complete(
+                    model=model_name,
+                    prompt=prompt,
+                    max_tokens=settings.max_tokens,
+                    temperature=settings.temperature,
+                    top_p=settings.top_p,
+                    require_json=True,
+                    request=request,
+                )
+                llm_call.request_payload = completion.request_payload
+                llm_call.response_payload = completion.raw_response
+                llm_call.response_text = completion.output_text
+                llm_call.latency_ms = completion.latency_ms
+                llm_call.prompt_tokens = completion.prompt_tokens
+                llm_call.completion_tokens = completion.completion_tokens
+                llm_call.total_tokens = completion.total_tokens
+                artifacts.write_retry_response(
+                    model_name=model_name,
+                    attempt=attempt,
+                    query_index=query_index,
+                    response=completion.raw_response,
+                )
+                artifacts.write_llm_response(
+                    query_index=query_index,
+                    model_name=model_name,
+                    response=completion.raw_response,
+                )
+                parse_result = parse_article_recommendations_with_diagnostics(completion.output_text)
+                parsed_items = parse_result.items
+            except OpenRouterError as exc:
+                failed_calls += 1
+                llm_call.status = ExecutionStatus.FAILED
+                llm_call.parse_success = False
+                llm_call.parse_error = str(exc)
+                llm_call.error_message = str(exc)
+                llm_call.latency_ms = exc.latency_ms
+                llm_call.finished_at = datetime.now(timezone.utc)
+                repository.save_llm_call(llm_call)
+                if exc.response_payload is not None:
+                    artifacts.write_retry_response(
+                        model_name=model_name,
+                        attempt=attempt,
+                        query_index=query_index,
+                        response=exc.response_payload,
+                    )
+                    artifacts.write_llm_response(
+                        query_index=query_index,
+                        model_name=model_name,
+                        response=exc.response_payload,
+                    )
+                metadata = {
+                    "status": ExecutionStatus.FAILED.value,
+                    "attempt": attempt,
+                    "started_at": llm_call.started_at,
+                    "finished_at": llm_call.finished_at,
+                    "latency_ms": exc.latency_ms,
+                    "error_message": str(exc),
+                    "failure_kind": exc.failure_kind,
+                    "status_code": exc.status_code,
+                    "provider_error_code": exc.provider_error_code,
+                }
+                artifacts.write_retry_parse_error(
+                    model_name=model_name,
+                    attempt=attempt,
+                    query_index=query_index,
+                    error_message=str(exc),
+                )
+                artifacts.write_retry_metadata(
+                    model_name=model_name,
+                    attempt=attempt,
+                    query_index=query_index,
+                    metadata=metadata,
+                )
+                artifacts.write_llm_parse_error(
+                    query_index=query_index,
+                    model_name=model_name,
+                    error_message=str(exc),
+                )
+                artifacts.write_llm_metadata(query_index=query_index, model_name=model_name, metadata=metadata)
+                artifacts.append_error(
+                    stage="retry",
+                    message=str(exc),
+                    model=model_name,
+                    attempt=attempt,
+                    query_index=query_index,
+                    query_text=query.text,
+                )
+                errors.append(str(exc))
+            except LLMParseError as exc:
+                failed_calls += 1
+                llm_call.status = ExecutionStatus.FAILED
+                llm_call.parse_success = False
+                llm_call.parse_error = str(exc)
+                llm_call.error_message = str(exc)
+                llm_call.finished_at = datetime.now(timezone.utc)
+                repository.save_llm_call(llm_call)
+                metadata = {
+                    "status": ExecutionStatus.FAILED.value,
+                    "attempt": attempt,
+                    "started_at": llm_call.started_at,
+                    "finished_at": llm_call.finished_at,
+                    "latency_ms": llm_call.latency_ms,
+                    "prompt_tokens": llm_call.prompt_tokens,
+                    "completion_tokens": llm_call.completion_tokens,
+                    "total_tokens": llm_call.total_tokens,
+                    "error_message": str(exc),
+                    "finish_reason": completion.finish_reason,
+                    "response_truncated": completion.finish_reason == "length",
+                }
+                artifacts.write_retry_parse_error(
+                    model_name=model_name,
+                    attempt=attempt,
+                    query_index=query_index,
+                    error_message=str(exc),
+                    response_text=llm_call.response_text,
+                )
+                artifacts.write_retry_metadata(
+                    model_name=model_name,
+                    attempt=attempt,
+                    query_index=query_index,
+                    metadata=metadata,
+                )
+                artifacts.write_llm_parse_error(
+                    query_index=query_index,
+                    model_name=model_name,
+                    error_message=str(exc),
+                    response_text=llm_call.response_text,
+                )
+                artifacts.write_llm_metadata(query_index=query_index, model_name=model_name, metadata=metadata)
+                artifacts.append_error(
+                    stage="retry",
+                    message=str(exc),
+                    model=model_name,
+                    attempt=attempt,
+                    query_index=query_index,
+                    query_text=query.text,
+                )
+                errors.append(str(exc))
+            else:
+                artifacts.write_retry_parsed_output(
+                    model_name=model_name,
+                    attempt=attempt,
+                    query_index=query_index,
+                    parsed_items=parsed_items,
+                )
+                artifacts.write_llm_parsed_output(
+                    query_index=query_index,
+                    model_name=model_name,
+                    parsed_items=parsed_items,
+                )
+                metadata = {
+                    "status": ExecutionStatus.COMPLETED.value,
+                    "attempt": attempt,
+                    "started_at": llm_call.started_at,
+                    "finished_at": datetime.now(timezone.utc),
+                    "latency_ms": completion.latency_ms,
+                    "prompt_tokens": completion.prompt_tokens,
+                    "completion_tokens": completion.completion_tokens,
+                    "total_tokens": completion.total_tokens,
+                    "finish_reason": completion.finish_reason,
+                    "parse_mode": parse_result.parse_mode,
+                    "parsed_item_count": len(parsed_items),
+                    "partial_json_recovery": parse_result.recovered_partial_json,
+                }
+                artifacts.write_retry_metadata(
+                    model_name=model_name,
+                    attempt=attempt,
+                    query_index=query_index,
+                    metadata=metadata,
+                )
+                artifacts.write_llm_metadata(query_index=query_index, model_name=model_name, metadata=metadata)
+                llm_call.status = ExecutionStatus.COMPLETED
+                llm_call.parse_success = True
+                llm_call.parse_error = None
+                llm_call.finished_at = datetime.now(timezone.utc)
+                repository.save_llm_call(llm_call)
+                repository.delete_llm_results_for_query_model(
+                    run_id=run.id,
+                    query_id=query.id,
+                    model_name=model_name,
+                )
+                query_results = _build_llm_result_records(
+                    run=run,
+                    query=query,
+                    model_name=model_name,
+                    llm_call=llm_call,
+                    parsed_items=parsed_items,
+                )
+                retry_results.extend(query_results)
+                completed_calls += 1
+                artifacts.append_event(
+                    stage="retry",
+                    message="Retry response parsed",
+                    model=model_name,
+                    attempt=attempt,
+                    query_index=query_index,
+                    query_text=query.text,
+                    article_count=len(parsed_items),
+                )
+
+        _update_run_model_state(
+            repository=repository,
+            run_id=run.id,
+            model_name=model_name,
+            progress_current=min(completed_existing + retry_index, total_queries),
+            progress_total=total_queries,
+            progress_message=f"Retried {retry_index}/{len(target_queries)} failed or missing queries",
+        )
+
+    repository.save_results(retry_results)
+    if retry_results:
+        enrich_results(
+            repository=repository,
+            results=retry_results,
+            progress_callback=None,
+            artifacts=artifacts,
+        )
+
+    from backend.application.analysis.service import build_run_analysis
+
+    analysis = build_run_analysis(repository=repository, run_id=run.id)
+    artifacts.write_analysis_payloads(analysis)
+    artifacts.write_analysis_metadata(
+        source="targeted_model_retry",
+        generated_at=datetime.now(timezone.utc),
+        external_llm_calls=completed_calls + failed_calls + skipped_calls,
+    )
+
+    final_model_status, model_error = _derive_model_retry_status(
+        repository=repository,
+        run=run,
+        queries=queries,
+        model_name=model_name,
+    )
+    finished_at = datetime.now(timezone.utc)
+    _update_run_model_state(
+        repository=repository,
+        run_id=run.id,
+        model_name=model_name,
+        status=final_model_status,
+        progress_current=total_queries,
+        progress_total=total_queries,
+        progress_message="Retry completed" if final_model_status == ExecutionStatus.COMPLETED else "Retry completed with failures",
+        finished_at=finished_at,
+        error_message=model_error or "",
+    )
+
+    final_run_status, run_error = _derive_llm_run_status_from_latest_calls(
+        repository=repository,
+        run=run,
+        queries=queries,
+    )
+    _update_run_state(
+        repository=repository,
+        run=run,
+        status=final_run_status,
+        stage="done" if final_run_status != RunStatus.FAILED else "error",
+        progress_current=run.progress_current,
+        progress_total=run.progress_total,
+        progress_message="Run completed" if final_run_status != RunStatus.FAILED else run_error,
+        error_message=run_error,
+        completed_at=finished_at,
+        finished_at=finished_at,
+        artifacts=artifacts,
+        query_count=len(queries),
+    )
+    summary = {
+        "run_id": str(run.id),
+        "model": model_name,
+        "attempt": attempt,
+        "status": final_model_status.value,
+        "run_status": final_run_status.value,
+        "started_at": started_at,
+        "finished_at": finished_at,
+        "target_query_count": len(target_queries),
+        "completed_calls": completed_calls,
+        "failed_calls": failed_calls,
+        "skipped_calls": skipped_calls,
+        "new_result_count": len(retry_results),
+        "retried_queries": [
+            {"id": str(query.id), "position": query.position, "text": query.text}
+            for query in target_queries
+        ],
+        "errors": errors,
+    }
+    artifacts.write_retry_summary(model_name=model_name, attempt=attempt, payload=summary)
+    artifacts.append_event(stage="retry", message="Targeted model retry finished", **summary)
+    return repository.get_run(run.id)
+
+
+def _derive_model_retry_status(
+    *,
+    repository: Repository,
+    run: Run,
+    queries: Sequence[Query],
+    model_name: str,
+) -> tuple[ExecutionStatus, str | None]:
+    completed, failed, messages = _count_model_latest_query_states(
+        repository=repository,
+        run=run,
+        queries=queries,
+        model_name=model_name,
+    )
+    return (
+        _final_model_status(
+            completed_count=completed,
+            failed_count=failed,
+            total_queries=len(queries),
+        ),
+        messages[-1] if messages else (f"{failed} query retries still incomplete" if failed else None),
+    )
+
+
+def _count_model_latest_query_states(
+    *,
+    repository: Repository,
+    run: Run,
+    queries: Sequence[Query],
+    model_name: str,
+) -> tuple[int, int, list[str]]:
+    latest_calls = repository.list_latest_llm_calls_for_model(run.id, model_name)
+    result_query_ids = {
+        result.query_id
+        for result in repository.list_results(run.id)
+        if result.model_name == model_name and result.origin_type == ResultOriginType.LLM_RESPONSE
+    }
+    completed = 0
+    failed = 0
+    messages: list[str] = []
+    for query in queries:
+        call = latest_calls.get(query.id)
+        if call is not None and call.status == ExecutionStatus.COMPLETED and query.id in result_query_ids:
+            completed += 1
+        else:
+            failed += 1
+            if call is not None and call.error_message:
+                messages.append(call.error_message)
+    return completed, failed, messages
+
+
+def _derive_llm_run_status_from_latest_calls(
+    *,
+    repository: Repository,
+    run: Run,
+    queries: Sequence[Query],
+) -> tuple[RunStatus, str | None]:
+    completed = 0
+    failed = 0
+    for selected_model in run.selected_models:
+        model_completed, model_failed, _ = _count_model_latest_query_states(
+            repository=repository,
+            run=run,
+            queries=queries,
+            model_name=selected_model,
+        )
+        completed += model_completed
+        failed += model_failed
+    if completed and failed:
+        return RunStatus.PARTIAL, _summarize_llm_issues(failed_calls=failed, skipped_calls=0)
+    if completed:
+        return RunStatus.COMPLETED, None
+    return RunStatus.FAILED, _summarize_llm_issues(failed_calls=failed, skipped_calls=0) or "All llm calls failed"
 
 
 def _finalize_llm_audit_run(

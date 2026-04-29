@@ -17,6 +17,7 @@ from backend.domain import (
     FieldProvenance,
     LLMCall,
     Query,
+    ResultOriginType,
     ResultRecord,
     Run,
     RunDetail,
@@ -448,6 +449,37 @@ class Repository:
             for row in rows
         ]
 
+    def list_latest_llm_calls_for_model(self, run_id: UUID, model_name: str) -> dict[UUID, LLMCall]:
+        """Return the newest stored LLM call for each query for one model."""
+
+        calls: dict[UUID, LLMCall] = {}
+        for call in self.list_llm_calls(run_id):
+            if call.model_name != model_name:
+                continue
+            calls[call.query_id] = call
+        return calls
+
+    def delete_llm_results_for_query_model(self, *, run_id: UUID, query_id: UUID, model_name: str) -> int:
+        """Delete result rows for one LLM query/model pair before replacing retry output."""
+
+        with self.database.connect() as connection:
+            cursor = connection.execute(
+                """
+                DELETE FROM result_records
+                WHERE run_id = ?
+                  AND query_id = ?
+                  AND model_name = ?
+                  AND origin_type = ?
+                """,
+                (
+                    str(run_id),
+                    str(query_id),
+                    model_name,
+                    ResultOriginType.LLM_RESPONSE.value,
+                ),
+            )
+        return cursor.rowcount
+
     def save_results(self, results: list[ResultRecord]) -> None:
         if not results:
             return
@@ -838,10 +870,17 @@ class Repository:
             ).fetchone()["query_count"]
             rows = connection.execute(
                 """
-                SELECT model_name, status, COUNT(*) AS total_count
-                FROM llm_calls
-                WHERE run_id = ?
-                GROUP BY model_name, status
+                SELECT c.model_name, c.status, COUNT(*) AS total_count
+                FROM llm_calls c
+                WHERE c.run_id = ?
+                  AND c.created_at = (
+                    SELECT MAX(newer.created_at)
+                    FROM llm_calls newer
+                    WHERE newer.run_id = c.run_id
+                      AND newer.model_name = c.model_name
+                      AND newer.query_id = c.query_id
+                  )
+                GROUP BY c.model_name, c.status
                 """,
                 (str(run_id),),
             ).fetchall()

@@ -10,7 +10,10 @@ import { RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
       <header class="shell__header">
         <div>
           <h1>Bias Analysis</h1>
-          <p>Interactive scholarly retrieval and OpenRouter model audit workspace with persisted SQLite runs.</p>
+<p>
+  A thesis-oriented tool for exploring bias in AI-based scientific literature search,
+  comparing scholarly retrieval results with outputs from OpenRouter language models.
+</p>
         </div>
         <nav class="shell__nav">
           <a routerLink="/runs" routerLinkActive="active" [routerLinkActiveOptions]="{ exact: true }">

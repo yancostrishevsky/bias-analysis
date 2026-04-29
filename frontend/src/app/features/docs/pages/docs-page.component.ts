@@ -56,7 +56,7 @@ interface DocFaqItem {
             </div>
             <div class="hero__actions">
               <a class="nav-button" routerLink="/runs">Open Runs</a>
-              <a class="nav-button secondary" href="#workflow">Suggested Workflow</a>
+            
             </div>
           </div>
 

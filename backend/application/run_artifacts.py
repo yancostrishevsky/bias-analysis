@@ -340,6 +340,105 @@ class RunArtifactsWriter:
             metadata,
         )
 
+    def write_retry_summary(
+        self,
+        *,
+        model_name: str,
+        attempt: int,
+        payload: dict[str, Any],
+    ) -> None:
+        """Persist metadata for one targeted model retry attempt."""
+
+        self._write_json(self._retry_attempt_dir(model_name, attempt) / "summary.json", payload)
+
+    def write_retry_request(
+        self,
+        *,
+        model_name: str,
+        attempt: int,
+        query_index: int,
+        request: dict[str, Any],
+    ) -> None:
+        self._write_json(
+            self._retry_model_query_dir(model_name, attempt, query_index) / "request.json",
+            request,
+        )
+
+    def write_retry_response(
+        self,
+        *,
+        model_name: str,
+        attempt: int,
+        query_index: int,
+        response: dict[str, Any],
+    ) -> None:
+        self._write_json(
+            self._retry_model_query_dir(model_name, attempt, query_index) / "response_raw.json",
+            response,
+        )
+
+    def write_retry_parsed_output(
+        self,
+        *,
+        model_name: str,
+        attempt: int,
+        query_index: int,
+        parsed_items: Sequence[dict[str, Any]],
+    ) -> None:
+        self._write_json(
+            self._retry_model_query_dir(model_name, attempt, query_index) / "parsed_output.json",
+            list(parsed_items),
+        )
+
+    def write_retry_parse_error(
+        self,
+        *,
+        model_name: str,
+        attempt: int,
+        query_index: int,
+        error_message: str,
+        response_text: str | None = None,
+    ) -> None:
+        self._write_json(
+            self._retry_model_query_dir(model_name, attempt, query_index) / "parse_error.json",
+            {
+                "error_message": error_message,
+                "response_text": response_text,
+            },
+        )
+
+    def write_retry_metadata(
+        self,
+        *,
+        model_name: str,
+        attempt: int,
+        query_index: int,
+        metadata: dict[str, Any],
+    ) -> None:
+        self._write_json(
+            self._retry_model_query_dir(model_name, attempt, query_index) / "metadata.json",
+            metadata,
+        )
+
+    def next_retry_attempt_number(self, model_name: str) -> int:
+        """Return the next filesystem attempt number for a model retry."""
+
+        if not self.enabled:
+            return 1
+        retry_dir = Path("retries") / self.sanitize_path_component(model_name)
+        absolute_dir = self.run_dir / retry_dir
+        if not absolute_dir.is_dir():
+            return 1
+        attempts: list[int] = []
+        for path in absolute_dir.iterdir():
+            if not path.is_dir() or not path.name.startswith("attempt_"):
+                continue
+            try:
+                attempts.append(int(path.name.removeprefix("attempt_")))
+            except ValueError:
+                continue
+        return max(attempts, default=0) + 1
+
     def write_replay_summary(self, payload: dict[str, Any]) -> None:
         """Persist one artifact-replay summary payload."""
 
@@ -594,6 +693,16 @@ class RunArtifactsWriter:
             / f"query_{query_index:03d}"
             / f"model_{self.sanitize_path_component(model_name)}"
         )
+
+    def _retry_attempt_dir(self, model_name: str, attempt: int) -> Path:
+        return (
+            Path("retries")
+            / self.sanitize_path_component(model_name)
+            / f"attempt_{attempt:03d}"
+        )
+
+    def _retry_model_query_dir(self, model_name: str, attempt: int, query_index: int) -> Path:
+        return self._retry_attempt_dir(model_name, attempt) / f"query_{query_index:03d}"
 
     def _record_dir(self, record_index: int) -> Path:
         return Path("enrichment") / f"record_{record_index:03d}"

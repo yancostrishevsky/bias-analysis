@@ -120,7 +120,17 @@ import { EnrichmentRow } from '../report/run-report.models';
             <article class="entity-card entity-card--model" *ngFor="let item of detail.entity_statuses">
               <div class="entity-card__header">
                 <strong>{{ item.name }}</strong>
-                <span class="status status--{{ item.status }}">{{ item.status }}</span>
+                <div class="entity-card__status-actions">
+                  <span class="status status--{{ item.status }}">{{ item.status }}</span>
+                  <button
+                    type="button"
+                    class="secondary entity-card__retry"
+                    *ngIf="canRetryModel(item)"
+                    (click)="retryModel(item)"
+                    [disabled]="isRetryingModel(item.name)">
+                    {{ isRetryingModel(item.name) ? 'Retrying...' : 'Retry' }}
+                  </button>
+                </div>
               </div>
               <p>{{ item.progress_message || entitySummary(item) }}</p>
               <div class="progress-stack progress-stack--compact" *ngIf="item.progress_total > 0">
@@ -685,6 +695,21 @@ import { EnrichmentRow } from '../report/run-report.models';
       font-size: 0.92rem;
     }
 
+    .entity-card__status-actions {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      flex-wrap: wrap;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .entity-card__retry {
+      padding: 7px 10px;
+      border-radius: 10px;
+      font-size: 0.88rem;
+    }
+
     .meta-row {
       display: flex;
       flex-wrap: wrap;
@@ -1131,6 +1156,7 @@ export class RunDetailPageComponent implements OnInit {
   protected starting = false;
   protected replaying = false;
   protected deleting = false;
+  protected retryingModelIds = new Set<string>();
   protected runError = '';
   protected resultsError = '';
   protected enrichmentsError = '';
@@ -1385,6 +1411,45 @@ export class RunDetailPageComponent implements OnInit {
     });
   }
 
+  protected retryModel(item: EntityExecutionSummary): void {
+    if (!this.runId || !this.detail || !this.canRetryModel(item)) {
+      return;
+    }
+
+    this.retryingModelIds = new Set([...this.retryingModelIds, item.name]);
+    this.actionError = '';
+    this.actionNotice = '';
+    this.detail = {
+      ...this.detail,
+      entity_statuses: this.detail.entity_statuses.map((entity) =>
+        entity.name === item.name && entity.entity_type === 'model'
+          ? {
+              ...entity,
+              status: 'running',
+              progress_message: 'Retrying failed or missing queries'
+            }
+          : entity
+      )
+    };
+    this.syncPolling();
+
+    this.runsApi.retryRunModel(this.runId, item.name).subscribe({
+      next: (detail) => {
+        this.detail = detail;
+        this.retryingModelIds.delete(item.name);
+        this.retryingModelIds = new Set(this.retryingModelIds);
+        this.actionNotice = `Retry finished for ${item.name}.`;
+        this.refreshAll();
+      },
+      error: (error: unknown) => {
+        this.actionError = this.formatError(error, `Failed to retry ${item.name}.`);
+        this.retryingModelIds.delete(item.name);
+        this.retryingModelIds = new Set(this.retryingModelIds);
+        this.syncPolling();
+      }
+    });
+  }
+
   protected deleteRun(): void {
     if (!this.runId || !this.detail) {
       return;
@@ -1479,6 +1544,25 @@ export class RunDetailPageComponent implements OnInit {
       this.detail.run.status !== 'running' &&
       this.replayStatus?.replay_available,
     );
+  }
+
+  protected canRetryModel(item: EntityExecutionSummary): boolean {
+    return Boolean(
+      this.detail?.run.run_type === 'llm_audit' &&
+      this.detail.run.status !== 'running' &&
+      item.entity_type === 'model' &&
+      (
+        item.status === 'failed' ||
+        item.status === 'partial' ||
+        item.status === 'skipped' ||
+        item.progress_current < item.progress_total ||
+        item.completed_count < item.total_count
+      )
+    );
+  }
+
+  protected isRetryingModel(modelName: string): boolean {
+    return this.retryingModelIds.has(modelName);
   }
 
   protected currentOutputSourceLabel(): string {
@@ -1706,7 +1790,7 @@ export class RunDetailPageComponent implements OnInit {
       return false;
     }
     const status = this.detail?.run.status;
-    return this.starting || status === 'pending' || status === 'running';
+    return this.starting || this.retryingModelIds.size > 0 || status === 'pending' || status === 'running';
   }
 
   private syncPolling(): void {

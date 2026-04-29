@@ -251,7 +251,7 @@ interface ModelPaginationSummary {
                       <span class="badge">{{ model.provider || 'OpenRouter' }}</span>
                     </span>
                     <span class="model-card__id">{{ model.id }}</span>
-                    <span class="model-card__description" *ngIf="model.description">{{ model.description }}</span>
+              
                   </span>
                   <span class="model-row__metric model-row__metric--number">
                     {{ formatContextLength(model.context_length) }}
@@ -1057,7 +1057,7 @@ export class RunListPageComponent implements OnInit {
   });
 
   protected readonly maxSelectedModels = 10;
-  protected readonly modelPageSizeOptions = [25, 50, 100];
+  protected readonly modelPageSizeOptions = [10, 25, 50, 100];
   protected options: RunOptionsResponse | null = null;
   protected openRouterModelsResponse: OpenRouterModelsResponse | null = null;
   protected runs: RunDetail[] = [];
@@ -1071,7 +1071,7 @@ export class RunListPageComponent implements OnInit {
   protected modelMinContextLength: number | null = null;
   protected modelSort = 'name';
   protected modelCurrentPage = 1;
-  protected modelPageSize = 25;
+  protected modelPageSize = 10;
   protected selectedSources = new Set<string>();
   protected selectedModels = new Set<string>();
   protected staleSelectedModelIds: string[] = [];

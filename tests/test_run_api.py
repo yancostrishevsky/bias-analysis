@@ -22,6 +22,7 @@ from backend.api.routes.runs import (
     get_run_results,
     export_run_records_file,
     replay_llm_artifacts,
+    retry_run_model,
     start_run,
 )
 from backend.config import get_settings
@@ -815,6 +816,138 @@ def test_start_llm_audit_run_allows_partial_model_failure(
     assert (run_dir / "llm/query_001/model_model-a/parsed_output.json").exists()
     assert (run_dir / "analysis/llm_audit.json").exists()
     assert _read_json(run_dir / "analysis/summary.json")["total_results"] == 1
+
+
+def test_retry_llm_audit_model_only_retries_failed_queries(
+    repository: Repository,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr("backend.api.routes.runs.get_repository", lambda: repository)
+    calls: list[tuple[str, str]] = []
+    retry_enabled = False
+
+    class FakeOpenRouterClient:
+        def list_models(self, *, user_scoped: bool, request=None):
+            return _fake_discovery_models("model-a", "model-b")
+
+        def build_completion_request(
+            self,
+            *,
+            model: str,
+            prompt: str,
+            max_tokens: int,
+            temperature: float,
+            top_p: float,
+            require_json: bool,
+        ) -> OpenRouterRequest:
+            return OpenRouterRequest(
+                method="POST",
+                url="https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": "Bearer test-openrouter-key",
+                    "Content-Type": "application/json",
+                },
+                payload={
+                    "model": model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": max_tokens,
+                    "temperature": temperature,
+                    "top_p": top_p,
+                    "require_json": require_json,
+                },
+            )
+
+        def complete(
+            self,
+            *,
+            model: str,
+            prompt: str,
+            max_tokens: int,
+            temperature: float,
+            top_p: float,
+            require_json: bool,
+            request: OpenRouterRequest | None = None,
+        ):
+            nonlocal retry_enabled
+            calls.append((model, prompt))
+            if model == "model-b" and not retry_enabled:
+                raise OpenRouterError("temporary provider failure")
+
+            class Response:
+                request_payload = request.payload if request is not None else {"model": model}
+                raw_response = {"id": f"resp-{model}"}
+                output_text = json.dumps(
+                    {
+                        "articles": [
+                            {
+                                "rank": 1,
+                                "title": f"{model} retryable article",
+                                "doi": f"10.1000/{model.replace('-', '')}",
+                                "year": 2024,
+                                "venue": "Journal of Retrieval Studies",
+                                "authors": ["Ada Lovelace"],
+                                "url": f"https://example.org/{model}",
+                                "rationale": "high relevance",
+                            }
+                        ]
+                    }
+                )
+                latency_ms = 120
+                finish_reason = "stop"
+                prompt_tokens = 10
+                completion_tokens = 20
+                total_tokens = 30
+
+            return Response()
+
+    monkeypatch.setattr(
+        "backend.application.run_executor.OpenRouterClient.from_settings",
+        lambda: FakeOpenRouterClient(),
+    )
+    monkeypatch.setattr(
+        "backend.application.run_executor.enrich_results",
+        lambda *, repository, results, progress_callback=None, artifacts=None: None,
+    )
+
+    created = create_run(
+        RunCreateRequest(
+            run_type="llm_audit",
+            queries=["bias in academic search", "fairness in ranking"],
+            selected_models=["model-a", "model-b"],
+            sources=[],
+            top_k=2,
+        )
+    )
+    run_id = created.run.id
+    run_dir = _artifact_dir(run_id)
+    started = start_run(run_id)
+    initial_results = get_run_results(run_id)
+
+    assert started.run.status == "partial"
+    assert {result.model_name for result in initial_results} == {"model-a"}
+    assert len([call for call in calls if call[0] == "model-a"]) == 2
+    assert len([call for call in calls if call[0] == "model-b"]) == 2
+
+    retry_enabled = True
+    retried = retry_run_model(run_id, "model-b")
+    retried_results = get_run_results(run_id)
+    model_states = {item.name: item for item in retried.entity_statuses}
+
+    assert retried.run.status == "completed"
+    assert model_states["model-a"].status == "completed"
+    assert model_states["model-b"].status == "completed"
+    assert len([call for call in calls if call[0] == "model-a"]) == 2
+    assert len([call for call in calls if call[0] == "model-b"]) == 4
+    assert len([result for result in retried_results if result.model_name == "model-a"]) == 2
+    assert len([result for result in retried_results if result.model_name == "model-b"]) == 2
+    assert (run_dir / "retries/model-b/attempt_001/summary.json").exists()
+    retry_summary = _read_json(run_dir / "retries/model-b/attempt_001/summary.json")
+    assert retry_summary["target_query_count"] == 2
+    assert retry_summary["completed_calls"] == 2
+    assert _read_json(run_dir / "analysis/metadata.json")["source"] == "targeted_model_retry"
+
+    retry_run_model(run_id, "model-b")
+    assert len([call for call in calls if call[0] == "model-b"]) == 4
 
 
 def test_start_llm_audit_uses_discovery_catalog_for_execution_preflight(

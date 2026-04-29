@@ -44,6 +44,7 @@ Main run endpoints:
 - `POST /runs/{id}/start`
 - `GET /runs/{id}/replay-status`
 - `POST /runs/{id}/replay-llm-artifacts`
+- `POST /runs/{id}/models/{model_id}/retry`
 - `GET /runs/{id}/results`
 - `GET /runs/{id}/enrichments`
 - `GET /runs/{id}/analysis`
@@ -109,6 +110,7 @@ Run artifacts:
 - Every created run gets a filesystem folder under `RUN_ARTIFACTS_DIR` such as `data/run_artifacts/run_<RUN_ID>/`.
 - Artifacts are written incrementally during execution so partial runs still keep requests, responses, parsed payloads, enrichment attempts, analysis payloads, and error logs.
 - `POST /runs/{id}/replay-llm-artifacts` rebuilds llm_audit parsing, enrichment, and analysis from persisted artifacts without calling the LLM provider again. Replay traces are written under `replay/` inside the existing run artifact folder.
+- `POST /runs/{id}/models/{model_id}/retry` retries only failed or missing query executions for one model in an existing `llm_audit` run. Successful query/model outputs are preserved, retry traces are written under `retries/<model>/attempt_<n>/`, and downstream enrichment and analysis outputs are refreshed.
 - Secrets are redacted before writing. Authorization headers are never persisted.
 
 ## Local Development

@@ -23,10 +23,12 @@ from backend.application.run_recovery import (
 from backend.application.run_executor import (
     InvalidRunModelSelectionError,
     UnsupportedArtifactReplayError,
+    UnsupportedModelRetryError,
     UnsupportedRunSourceError,
     execute_run,
     normalize_run_sources,
     replay_llm_run_from_artifacts,
+    retry_llm_model,
 )
 from backend.config import OpenRouterModelOption, ScholarlySourceOption, get_settings
 from backend.domain import (
@@ -292,6 +294,64 @@ def get_run_replay_status(run_id: UUID) -> ReplayStatusResponse:
             else None
         ),
     )
+
+
+@router.post("/{run_id}/models/{model_id:path}/retry", response_model=RunDetail)
+def retry_run_model(run_id: UUID, model_id: str) -> RunDetail:
+    """Retry failed or missing query executions for one model in an llm_audit run."""
+
+    repository = _repository()
+    run = _get_run_or_404(repository, run_id)
+    queries = repository.list_queries(run.id)
+    if run.run_type != RunType.LLM_AUDIT:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Model retry is only supported for llm_audit runs",
+        )
+    if run.status.value == "running":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Run {run_id} cannot retry a model while it is running",
+        )
+    if model_id not in run.selected_models:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Model {model_id} not found in run {run_id}",
+        )
+
+    latest_calls = repository.list_latest_llm_calls_for_model(run.id, model_id)
+    result_query_ids = {
+        result.query_id
+        for result in repository.list_results(run.id)
+        if result.model_name == model_id
+    }
+    retryable = any(
+        query.id not in latest_calls
+        or latest_calls[query.id].status.value != "completed"
+        or query.id not in result_query_ids
+        for query in queries
+    )
+    if not retryable:
+        get_run_artifacts_writer(run.id).append_event(
+            stage="retry",
+            message="Model retry request was idempotent; no failed or missing queries found",
+            model=model_id,
+        )
+        return repository.get_run_detail(run.id)
+
+    try:
+        retry_llm_model(
+            repository=repository,
+            run=run,
+            queries=queries,
+            model_name=model_id,
+        )
+    except UnsupportedModelRetryError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+    return repository.get_run_detail(run_id)
 
 
 @router.get("/{run_id}/results", response_model=list[ResultRecord])
