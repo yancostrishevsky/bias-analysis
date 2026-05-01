@@ -199,7 +199,7 @@ class AppSettings(SettingsModel):
     run_artifacts: RunArtifactsSettings
     scholarly_sources: list[str] = Field(default_factory=lambda: ["openalex"])
     source_catalog: list[ScholarlySourceOption] = Field(default_factory=list)
-    default_run_type: str = "scholarly"
+    default_run_type: str = "llm_audit"
     enrichment_provider_order: list[str] = Field(default_factory=list)
     enabled_enrichment_providers: list[str] = Field(default_factory=list)
     openrouter: OpenRouterSettings
@@ -634,7 +634,7 @@ def get_settings() -> AppSettings:
             scopus=scopus_settings,
             core=core_settings,
         ),
-        default_run_type="scholarly",
+        default_run_type="llm_audit",
         enrichment_provider_order=provider_order,
         enabled_enrichment_providers=enabled_providers,
         openrouter=_build_openrouter_settings(),

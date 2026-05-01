@@ -277,6 +277,10 @@ type SortKey =
                         <div><span class="detail-label">Query</span><p>{{ row.query_text }}</p></div>
                         <div><span class="detail-label">Entity</span><p>{{ row.model_or_platform }}</p></div>
                         <div><span class="detail-label">Matched</span><p>{{ row.matched ? 'yes' : 'no' }}</p></div>
+                        <div><span class="detail-label">Verification</span><p>{{ row.verification_status || '—' }}</p></div>
+                        <div><span class="detail-label">Existence Risk</span><p>{{ row.existence_risk_bucket || '—' }}</p></div>
+                        <div><span class="detail-label">Metadata Risk</span><p>{{ row.metadata_risk_bucket || '—' }}</p></div>
+                        <div><span class="detail-label">Near Match</span><p>{{ row.near_match_reason ? (row.near_match_reason + (row.near_match_score !== null ? ' (' + (row.near_match_score | number:'1.2-2') + ')' : '')) : '—' }}</p></div>
                         <div><span class="detail-label">Risk Bucket</span><p>{{ row.hallucination_risk_bucket || '—' }}</p></div>
                         <div><span class="detail-label">Risk Reasons</span><p>{{ row.risk_reasons.length ? row.risk_reasons.join(', ') : '—' }}</p></div>
                         <div><span class="detail-label">Parse Strategy</span><p>{{ row.parse_strategy || '—' }}</p></div>
@@ -512,6 +516,9 @@ export class RunRecordsPageComponent implements OnInit {
         column('Rank', (row) => String(row.rank), true),
         column('Matched', (row) => row.matched ? 'yes' : 'no'),
         column('DOI Valid', (row) => row.doi_valid === null ? '—' : row.doi_valid ? 'yes' : 'no'),
+        column('Verification', (row) => row.verification_status || '—'),
+        column('Existence Risk', (row) => row.existence_risk_bucket || '—'),
+        column('Metadata Risk', (row) => row.metadata_risk_bucket || '—'),
         column('Title Match', (row) => row.title_match_status || '—'),
         column('Conflicts', (row) => String(row.conflict_count), true),
         column('Risk Bucket', (row) => row.hallucination_risk_bucket || '—'),
@@ -529,7 +536,7 @@ export class RunRecordsPageComponent implements OnInit {
       column('Publisher', (row) => row.publisher || '—'),
       column('Language', (row) => row.language || '—'),
       column('Matched', (row) => row.matched ? 'yes' : 'no'),
-      column('Risk', (row) => row.hallucination_risk_bucket || '—'),
+      column('Verification', (row) => row.verification_status || '—'),
       column('Conflicts', (row) => String(row.conflict_count), true),
     ];
   }

@@ -104,6 +104,11 @@ class UnifiedRecordRow(DomainModel):
     parse_errors: str | None = None
 
     suspicious_completeness: bool = False
+    verification_status: str | None = None
+    existence_risk_bucket: str | None = None
+    metadata_risk_bucket: str | None = None
+    near_match_score: float | None = Field(default=None, ge=0.0, le=1.0)
+    near_match_reason: str | None = None
     hallucination_risk_bucket: str | None = None
     risk_reasons: list[str] = Field(default_factory=list)
     provenance_summary: str | None = None

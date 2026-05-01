@@ -423,6 +423,11 @@ export interface UnifiedRecordRow {
   parse_fallback_used: boolean;
   parse_errors: string | null;
   suspicious_completeness: boolean;
+  verification_status: string | null;
+  existence_risk_bucket: string | null;
+  metadata_risk_bucket: string | null;
+  near_match_score: number | null;
+  near_match_reason: string | null;
   hallucination_risk_bucket: string | null;
   risk_reasons: string[];
   provenance_summary: string | null;

@@ -2395,6 +2395,9 @@ def test_records_endpoint_and_exports_expose_verifiability_layers(
     assert any(row.hallucination_risk_bucket == "high" for row in payload.rows)
     assert any(row.matched is True and row.hallucination_risk_bucket == "low" for row in payload.rows)
     assert any(row.any_conflict is True for row in payload.rows)
+    assert any(row.verification_status == "verified_exact" for row in payload.rows)
+    assert any(row.verification_status == "unverified_unknown" for row in payload.rows)
+    assert any(row.metadata_risk_bucket == "high" for row in payload.rows)
 
     filtered = get_run_records(run.id, risk_bucket="high")
     assert filtered.summary.filtered_rows >= 1
@@ -2417,3 +2420,5 @@ def test_records_endpoint_and_exports_expose_verifiability_layers(
     exported_row = json.loads(lines[1])
     assert exported_row["hallucination_risk_bucket"] == "high"
     assert exported_row["matched"] is False
+    assert exported_row["verification_status"] == "unverified_unknown"
+    assert exported_row["metadata_risk_bucket"] == "high"

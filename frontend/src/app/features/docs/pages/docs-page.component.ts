@@ -38,7 +38,7 @@ interface DocFaqItem {
         <h2>On This Page</h2>
         <p class="toc__intro">This guide reflects the currently implemented run, report, and records workflow in the app.</p>
         <nav class="toc__nav">
-          <a *ngFor="let item of navItems" [href]="'#' + item.id">{{ item.label }}</a>
+          <a *ngFor="let item of navItems" routerLink="/docs" [fragment]="item.id">{{ item.label }}</a>
         </nav>
       </aside>
 

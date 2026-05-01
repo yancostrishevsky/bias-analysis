@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import json
+
 from backend.adapters.openalex.enrichment_mapper import map_openalex_payload_to_enrichment
 from backend.application.enrichment.canonicalize import canonicalize_enrichment_records
 from backend.application.records.service import build_unified_record_rows
+from backend.application.run_artifacts import get_run_artifacts_writer
 from backend.domain import (
     EnrichmentMatchStrategy,
     EnrichmentProvider,
@@ -80,6 +83,9 @@ def test_alias_and_initial_author_differences_do_not_inflate_high_risk(repositor
     assert row.hallucination_risk_bucket == "low"
     assert row.conflict_count == 0
     assert row.risk_reasons == []
+    assert row.verification_status == "verified_exact"
+    assert row.existence_risk_bucket == "low"
+    assert row.metadata_risk_bucket == "low"
 
 
 def test_doi_resolves_to_different_title_remains_high_risk(repository: Repository) -> None:
@@ -190,6 +196,8 @@ def test_provider_failure_plus_completeness_defaults_to_medium(repository: Repos
     assert row.suspicious_completeness is True
     assert row.hallucination_risk_bucket == "medium"
     assert row.risk_reasons == ["unmatched:provider_failed", "suspicious_completeness"]
+    assert row.verification_status == "unverified_provider_failed"
+    assert row.existence_risk_bucket == "unknown"
 
 
 def test_successful_not_found_unmatched_still_high_when_complete(repository: Repository) -> None:
@@ -229,6 +237,85 @@ def test_successful_not_found_unmatched_still_high_when_complete(repository: Rep
     assert row.unmatched_reason == "not_found"
     assert row.hallucination_risk_bucket == "high"
     assert "unmatched:not_found" in row.risk_reasons
+    assert row.verification_status == "unverified_not_found"
+    assert row.existence_risk_bucket == "high"
+
+
+def test_near_match_is_tracked_separately_from_unverified_not_found(repository: Repository) -> None:
+    run, _, _, result = _persist_llm_result(
+        repository,
+        {
+            "title": "Machine learning in radiology: applications beyond image interpretation",
+            "doi": "10.1148/radiol.2018170615",
+            "year": 2018,
+            "authors": ["Paras Lakhani", "Adam B. Prater"],
+            "venue": "Radiology",
+            "publisher": "RSNA",
+            "language": "en",
+            "url": "https://doi.org/10.1148/radiol.2018170615",
+        },
+    )
+    repository.replace_enrichments(
+        result.id,
+        [
+            EnrichmentRecord(
+                result_record_id=result.id,
+                provider=EnrichmentProvider.OPENALEX,
+                provider_record_id="openalex:skipped",
+                status=ExecutionStatus.SKIPPED,
+                error_message="OpenAlex did not match the record",
+            ),
+            EnrichmentRecord(
+                result_record_id=result.id,
+                provider=EnrichmentProvider.SEMANTIC_SCHOLAR,
+                provider_record_id="semantic_scholar:skipped",
+                status=ExecutionStatus.SKIPPED,
+                error_message="Semantic Scholar did not match the record",
+            ),
+        ],
+        None,
+    )
+
+    writer = get_run_artifacts_writer(run.id)
+    attempt_path = writer.run_dir / "enrichment" / "record_001" / "provider_openalex_attempt_001.json"
+    attempt_path.parent.mkdir(parents=True, exist_ok=True)
+    attempt_path.write_text(
+        json.dumps(
+            {
+                "provider": "openalex",
+                "normalized_record": {
+                    "result_record_id": str(result.id),
+                },
+                "raw_response": {
+                    "payload": {
+                        "results": [
+                            {
+                                "display_name": "Machine Learning in Radiology: Applications Beyond Image Interpretation",
+                                "doi": "https://doi.org/10.1016/j.jacr.2017.09.044",
+                                "publication_year": 2018,
+                                "authorships": [
+                                    {"author": {"display_name": "Paras Lakhani"}},
+                                    {"author": {"display_name": "Adam B. Prater"}},
+                                ],
+                            }
+                        ]
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    row = build_unified_record_rows(repository=repository, run_id=run.id)[0]
+
+    assert row.matched is False
+    assert row.unmatched_reason == "not_found"
+    assert row.verification_status == "near_match_suspected"
+    assert row.existence_risk_bucket == "medium"
+    assert row.metadata_risk_bucket == "high"
+    assert row.near_match_reason == "title_exact_doi_mismatch"
+    assert row.near_match_score is not None
+    assert row.near_match_score >= 0.84
 
 
 def _build_row(

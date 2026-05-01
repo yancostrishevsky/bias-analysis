@@ -143,7 +143,7 @@ export interface QueryModelDetailRow {
   parsedItemCount: number | null;
   resultCount: number;
   verifiedCount: number;
-  highRiskCount: number;
+  unverifiedCount: number;
   latencyMs: number | null;
   totalTokens: number | null;
   errorMessage: string | null;

@@ -15,7 +15,8 @@ from typing import Any, Iterable, Sequence
 from uuid import UUID
 
 from backend.application.analysis.service import _read_llm_artifact_metadata
-from backend.application.enrichment.providers import normalize_doi
+from backend.application.run_artifacts import get_run_artifacts_writer
+from backend.application.enrichment.providers import normalize_doi, normalize_title
 from backend.domain import (
     AnalysisFilterOption,
     CanonicalEnrichment,
@@ -118,6 +119,7 @@ def build_unified_record_rows(
     llm_calls = repository.list_llm_calls(run_id)
     llm_call_lookup = {call.id: call for call in llm_calls}
     llm_call_metadata = _read_llm_artifact_metadata(run_id=run_id, queries=detail.queries)
+    provider_attempts_by_result = _read_enrichment_attempt_artifacts(run_id)
     repeat_indices = _repeat_indices(llm_calls)
     query_lookup = {str(query.id): query for query in detail.queries}
 
@@ -140,6 +142,7 @@ def build_unified_record_rows(
                 canonical=canonical,
                 llm_call=llm_call,
                 llm_metadata=llm_metadata,
+                provider_attempts=provider_attempts_by_result.get(str(result.id), []),
                 repeat_index=repeat_indices.get(result.llm_call_id) if result.llm_call_id else None,
             )
         )
@@ -196,6 +199,7 @@ def _build_unified_row(
     canonical: CanonicalEnrichment | None,
     llm_call: LLMCall | None,
     llm_metadata: dict[str, Any] | None,
+    provider_attempts: Sequence[dict[str, Any]],
     repeat_index: int | None,
 ) -> UnifiedRecordRow:
     entity = result.model_name or result.source_name or "overall"
@@ -257,6 +261,12 @@ def _build_unified_row(
         language=language,
         result=result,
     )
+    near_match = _near_match_signal(
+        result=result,
+        provider_attempts=provider_attempts,
+        provider_records=provider_records,
+        matched=matched,
+    )
     risk_reasons = _risk_reasons(
         run_type=run_detail.run.run_type,
         parse_status=parse_status,
@@ -275,6 +285,28 @@ def _build_unified_row(
     hallucination_risk_bucket = _hallucination_risk_bucket(
         run_type=run_detail.run.run_type,
         risk_reasons=risk_reasons,
+    )
+    verification_status = _verification_status(
+        matched=matched,
+        unmatched_reason=unmatched_reason,
+        near_match=near_match,
+        any_conflict=conflict_count > 0,
+    )
+    existence_risk_bucket = _existence_risk_bucket(
+        verification_status=verification_status,
+        unmatched_reason=unmatched_reason,
+    )
+    metadata_risk_bucket = _metadata_risk_bucket(
+        doi_valid=doi_valid,
+        doi_conflict=doi_conflict,
+        title_match_status=title_match_status,
+        year_conflict=year_conflict,
+        journal_conflict=journal_conflict,
+        author_conflict=author_conflict,
+        publisher_conflict=publisher_conflict,
+        conflict_count=conflict_count,
+        suspicious_completeness=suspicious_completeness,
+        near_match=near_match,
     )
     provenance_summary = _provenance_summary(canonical, provider_records)
 
@@ -334,6 +366,11 @@ def _build_unified_row(
         parse_fallback_used=parse_fallback_used,
         parse_errors=(llm_call.error_message or llm_call.parse_error) if llm_call else None,
         suspicious_completeness=suspicious_completeness,
+        verification_status=verification_status,
+        existence_risk_bucket=existence_risk_bucket,
+        metadata_risk_bucket=metadata_risk_bucket,
+        near_match_score=near_match["score"] if near_match is not None else None,
+        near_match_reason=near_match["reason"] if near_match is not None else None,
         hallucination_risk_bucket=hallucination_risk_bucket,
         risk_reasons=risk_reasons,
         provenance_summary=provenance_summary,
@@ -362,6 +399,11 @@ def _build_unified_row(
             "conflict_count": conflict_count,
             "suspicious_completeness": suspicious_completeness,
             "unmatched_reason": unmatched_reason,
+            "verification_status": verification_status,
+            "existence_risk_bucket": existence_risk_bucket,
+            "metadata_risk_bucket": metadata_risk_bucket,
+            "near_match_score": near_match["score"] if near_match is not None else None,
+            "near_match_reason": near_match["reason"] if near_match is not None else None,
             "risk_reasons": risk_reasons,
         },
     )
@@ -380,6 +422,243 @@ def _repeat_indices(llm_calls: Sequence[LLMCall]) -> dict[UUID, int]:
         ):
             indices[call.id] = index
     return indices
+
+
+def _read_enrichment_attempt_artifacts(run_id: UUID) -> dict[str, list[dict[str, Any]]]:
+    writer = get_run_artifacts_writer(run_id)
+    enrichment_dir = writer.run_dir / "enrichment"
+    if not enrichment_dir.is_dir():
+        return {}
+
+    attempts_by_result: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for path in sorted(enrichment_dir.glob("record_*/provider_*_attempt_*.json")):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        normalized_record = payload.get("normalized_record")
+        result_record_id = None
+        if isinstance(normalized_record, dict):
+            result_record_id = normalized_record.get("result_record_id")
+        if not result_record_id:
+            result_record_id = payload.get("result_record_id")
+        if isinstance(result_record_id, str) and result_record_id:
+            attempts_by_result[result_record_id].append(payload)
+    return attempts_by_result
+
+
+def _near_match_signal(
+    *,
+    result: ResultRecord,
+    provider_attempts: Sequence[dict[str, Any]],
+    provider_records: Sequence[EnrichmentRecord],
+    matched: bool,
+) -> dict[str, Any] | None:
+    if matched:
+        return None
+    if not provider_attempts:
+        return None
+    if _unmatched_reason(provider_records) == "provider_failed":
+        return None
+
+    best: dict[str, Any] | None = None
+    for attempt in provider_attempts:
+        provider = str(attempt.get("provider") or "")
+        for candidate in _attempt_candidates(provider, attempt):
+            score = _near_match_score(result, candidate)
+            if score is None:
+                continue
+            title_similarity = score["title_similarity"]
+            overall = score["score"]
+            if overall < 0.84 or title_similarity < 0.8:
+                continue
+            reason = _near_match_reason(result=result, candidate=candidate, score=score)
+            current = {
+                "provider": provider or "unknown",
+                "score": overall,
+                "title_similarity": title_similarity,
+                "reason": reason,
+                "candidate_title": candidate.get("title"),
+                "candidate_doi": candidate.get("doi"),
+                "candidate_year": candidate.get("year"),
+            }
+            if best is None or current["score"] > best["score"]:
+                best = current
+    return best
+
+
+def _attempt_candidates(provider: str, attempt: dict[str, Any]) -> list[dict[str, Any]]:
+    raw_response = attempt.get("raw_response")
+    if not isinstance(raw_response, dict):
+        return []
+
+    if provider == "openalex":
+        payload = raw_response.get("payload")
+        if isinstance(payload, dict):
+            if isinstance(payload.get("results"), list):
+                items = payload.get("results") or []
+            else:
+                items = [payload]
+            return [
+                {
+                    "title": item.get("display_name") or item.get("title"),
+                    "doi": normalize_doi(item.get("doi") or ((item.get("ids") or {}).get("doi") if isinstance(item.get("ids"), dict) else None)),
+                    "year": _coerce_year(item.get("publication_year")),
+                    "authors": _openalex_candidate_authors(item.get("authorships")),
+                }
+                for item in items
+                if isinstance(item, dict)
+            ]
+        return []
+
+    if provider == "semantic_scholar":
+        items = raw_response.get("data")
+        if not isinstance(items, list):
+            return []
+        return [
+            {
+                "title": item.get("title"),
+                "doi": normalize_doi(((item.get("externalIds") or {}).get("DOI") if isinstance(item.get("externalIds"), dict) else None)),
+                "year": _coerce_year(item.get("year")),
+                "authors": _candidate_authors(item.get("authors"), name_key="name"),
+            }
+            for item in items
+            if isinstance(item, dict)
+        ]
+
+    if provider == "scopus":
+        payload = raw_response.get("search-results")
+        if not isinstance(payload, dict):
+            return []
+        items = payload.get("entry")
+        if not isinstance(items, list):
+            return []
+        return [
+            {
+                "title": item.get("dc:title"),
+                "doi": normalize_doi(item.get("prism:doi")),
+                "year": _coerce_year(item.get("prism:coverDate")),
+                "authors": _candidate_authors(item.get("author"), name_key="authname"),
+            }
+            for item in items
+            if isinstance(item, dict) and any(item.get(key) for key in ("dc:title", "prism:doi", "prism:coverDate"))
+        ]
+
+    if provider == "core":
+        payload = raw_response.get("payload") if isinstance(raw_response.get("payload"), dict) else raw_response
+        if not isinstance(payload, dict):
+            return []
+        items = payload.get("results")
+        if not isinstance(items, list):
+            items = payload.get("data") if isinstance(payload.get("data"), list) else []
+        return [
+            {
+                "title": item.get("title"),
+                "doi": normalize_doi(item.get("doi")),
+                "year": _coerce_year(item.get("year") or item.get("publishedDate")),
+                "authors": _core_candidate_authors(item),
+            }
+            for item in items
+            if isinstance(item, dict)
+        ]
+
+    return []
+
+
+def _openalex_candidate_authors(authorships: Any) -> list[str]:
+    if not isinstance(authorships, list):
+        return []
+    authors: list[str] = []
+    for authorship in authorships:
+        if not isinstance(authorship, dict):
+            continue
+        author = authorship.get("author")
+        if isinstance(author, dict):
+            name = author.get("display_name")
+            if isinstance(name, str) and name.strip():
+                authors.append(name.strip())
+    return authors
+
+
+def _candidate_authors(value: Any, *, name_key: str) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    authors: list[str] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        name = item.get(name_key)
+        if isinstance(name, str) and name.strip():
+            authors.append(name.strip())
+    return authors
+
+
+def _core_candidate_authors(payload: dict[str, Any]) -> list[str]:
+    authors = payload.get("authors") or payload.get("author")
+    if isinstance(authors, list):
+        output: list[str] = []
+        for item in authors:
+            if isinstance(item, dict):
+                name = item.get("name")
+                if isinstance(name, str) and name.strip():
+                    output.append(name.strip())
+            elif isinstance(item, str) and item.strip():
+                output.append(item.strip())
+        return output
+    if isinstance(authors, str) and authors.strip():
+        return [authors.strip()]
+    return []
+
+
+def _near_match_score(result: ResultRecord, candidate: dict[str, Any]) -> dict[str, float] | None:
+    result_title = normalize_title(result.title)
+    candidate_title = normalize_title(candidate.get("title"))
+    if not result_title or not candidate_title:
+        return None
+    title_similarity = SequenceMatcher(None, result_title, candidate_title).ratio()
+    title_tokens = set(result_title.split())
+    candidate_tokens = set(candidate_title.split())
+    denominator = len(title_tokens | candidate_tokens)
+    token_overlap = (len(title_tokens & candidate_tokens) / denominator) if denominator else 0.0
+    year_score = 0.0
+    if result.year is not None and candidate.get("year") is not None:
+        year_delta = abs(result.year - int(candidate["year"]))
+        if year_delta == 0:
+            year_score = 0.12
+        elif year_delta == 1:
+            year_score = 0.06
+    author_score = 0.0
+    if result.authors and candidate.get("authors"):
+        if _normalize_author_set(result.authors) & _normalize_author_set(candidate["authors"]):
+            author_score = 0.08
+    overall = min(1.0, (0.72 * title_similarity) + (0.12 * (token_overlap or 0.0)) + year_score + author_score)
+    return {
+        "score": overall,
+        "title_similarity": title_similarity,
+        "token_overlap": token_overlap or 0.0,
+    }
+
+
+def _near_match_reason(*, result: ResultRecord, candidate: dict[str, Any], score: dict[str, float]) -> str:
+    candidate_doi = normalize_doi(candidate.get("doi"))
+    result_doi = normalize_doi(result.doi)
+    candidate_year = candidate.get("year")
+    if result_doi and candidate_doi and result_doi != candidate_doi and score["title_similarity"] >= 0.95:
+        return "title_exact_doi_mismatch"
+    if result.year is not None and candidate_year is not None and abs(result.year - int(candidate_year)) <= 1 and score["title_similarity"] >= 0.88:
+        return "title_close_year_match"
+    return "title_close_candidate"
+
+
+def _normalize_author_set(values: Sequence[str]) -> set[str]:
+    normalized: set[str] = set()
+    for value in values:
+        cleaned = normalize_title(value)
+        if cleaned:
+            normalized.add(cleaned)
+    return normalized
 
 
 def _filter_rows(
@@ -792,6 +1071,56 @@ def _suspicious_completeness(
     return populated >= 5
 
 
+def _verification_status(
+    *,
+    matched: bool,
+    unmatched_reason: str | None,
+    near_match: dict[str, Any] | None,
+    any_conflict: bool,
+) -> str:
+    if matched:
+        return "verified_conflicted" if any_conflict else "verified_exact"
+    if near_match is not None:
+        return "near_match_suspected"
+    if unmatched_reason == "provider_failed":
+        return "unverified_provider_failed"
+    if unmatched_reason == "not_found":
+        return "unverified_not_found"
+    return "unverified_unknown"
+
+
+def _existence_risk_bucket(*, verification_status: str, unmatched_reason: str | None) -> str:
+    if verification_status in {"verified_exact", "verified_conflicted"}:
+        return "low"
+    if verification_status == "near_match_suspected":
+        return "medium"
+    if unmatched_reason in {"provider_failed", "coverage_unknown", "disabled", "skipped", None}:
+        return "unknown"
+    return "high"
+
+
+def _metadata_risk_bucket(
+    *,
+    doi_valid: bool | None,
+    doi_conflict: bool,
+    title_match_status: str | None,
+    year_conflict: bool,
+    journal_conflict: bool,
+    author_conflict: bool,
+    publisher_conflict: bool,
+    conflict_count: int,
+    suspicious_completeness: bool,
+    near_match: dict[str, Any] | None,
+) -> str:
+    if doi_valid is False or doi_conflict or title_match_status == "no" or year_conflict or conflict_count >= 3:
+        return "high"
+    if near_match is not None:
+        return "high" if near_match.get("reason") == "title_exact_doi_mismatch" else "medium"
+    if journal_conflict or author_conflict or publisher_conflict or suspicious_completeness or conflict_count > 0:
+        return "medium"
+    return "low"
+
+
 def _hallucination_risk_bucket(
     *,
     run_type: RunType,
@@ -1020,6 +1349,11 @@ def _export_row(*, row: UnifiedRecordRow, export_view: str) -> dict[str, Any]:
             "parse_fallback_used",
             "parse_errors",
             "suspicious_completeness",
+            "verification_status",
+            "existence_risk_bucket",
+            "metadata_risk_bucket",
+            "near_match_score",
+            "near_match_reason",
             "hallucination_risk_bucket",
             "risk_reasons",
             "verification_trace",

@@ -169,7 +169,7 @@ function buildEntitySummarySection(input: ReportInput, rows: UnifiedRecordRow[])
       'entity-summary',
       'Per-Model Dashboard',
       'Per-Model / Per-Platform Summary',
-      'This section summarizes the retrieval and metadata profile of each model or platform so quality, completeness, and risk can be compared quickly.',
+      'This section summarizes retrieval, verification, and metadata quality so each model or platform can be compared without collapsing exact matches, near matches, and unresolved records into one risk bucket.',
       'No grouped record rows are available for the current filters.'
     );
   }
@@ -178,7 +178,7 @@ function buildEntitySummarySection(input: ReportInput, rows: UnifiedRecordRow[])
     key: 'entity-summary',
     eyebrow: 'Per-Model Dashboard',
     title: 'Per-Model / Per-Platform Summary',
-    description: 'This section summarizes the retrieval and metadata profile of each model or platform and supports fast comparison of quality, completeness, and verification risk.',
+    description: 'This section summarizes the retrieval and metadata profile of each model or platform and separates hard verification, near matches, unresolved records, and metadata risk.',
     status: 'available',
     tables: [
       buildTable(
@@ -191,6 +191,8 @@ function buildEntitySummarySection(input: ReportInput, rows: UnifiedRecordRow[])
           column('per_query', 'Avg / query', 'end'),
           column('doi', 'DOI-valid', 'end'),
           column('matched', 'Matched', 'end'),
+          column('near', 'Near', 'end'),
+          column('unverified', 'Unverified', 'end'),
           column('metadata', 'Metadata', 'end'),
           column('missing', 'Missingness', 'end'),
           column('language', 'Language known', 'end'),
@@ -198,7 +200,7 @@ function buildEntitySummarySection(input: ReportInput, rows: UnifiedRecordRow[])
           column('publisher', 'Publisher known', 'end'),
           column('oa', 'OA known', 'end'),
           column('conflict', 'Conflict rate', 'end'),
-          column('risk', input.detail.run.run_type === 'llm_audit' ? 'High risk' : 'Risk', 'end')
+          column('risk', input.detail.run.run_type === 'llm_audit' ? 'Severe metadata' : 'Risk', 'end')
         ],
         grouped.map(([entity, entityRows]) => {
           const queryCount = new Set(entityRows.map((row) => row.query_id)).size;
@@ -212,6 +214,8 @@ function buildEntitySummarySection(input: ReportInput, rows: UnifiedRecordRow[])
               per_query: numberLabel(ratio(entityRows.length, queryCount)),
               doi: percentageLabel(ratio(entityRows.filter((row) => row.doi_valid === true).length, entityRows.length)),
               matched: percentageLabel(ratio(entityRows.filter((row) => row.matched).length, entityRows.length)),
+              near: percentageLabel(ratio(entityRows.filter((row) => row.verification_status === 'near_match_suspected').length, entityRows.length)),
+              unverified: percentageLabel(ratio(entityRows.filter((row) => isUnverified(row)).length, entityRows.length)),
               metadata: percentageLabel(mean(entityRows.map(recordCompleteness))),
               missing: percentageLabel(difference(1, mean(entityRows.map(recordCompleteness)))),
               language: percentageLabel(ratio(entityRows.filter((row) => Boolean(row.language)).length, entityRows.length)),
@@ -220,7 +224,7 @@ function buildEntitySummarySection(input: ReportInput, rows: UnifiedRecordRow[])
               oa: percentageLabel(ratio(entityRows.filter((row) => row.is_oa !== null || Boolean(row.oa_status)).length, entityRows.length)),
               conflict: percentageLabel(ratio(entityRows.filter((row) => row.any_conflict).length, entityRows.length)),
               risk: input.detail.run.run_type === 'llm_audit'
-                ? percentageLabel(ratio(entityRows.filter((row) => row.hallucination_risk_bucket === 'high').length, entityRows.length))
+                ? percentageLabel(ratio(entityRows.filter((row) => row.metadata_risk_bucket === 'high').length, entityRows.length))
                 : '—'
             }
           };
@@ -312,9 +316,11 @@ function buildPerQueryDiagnosticsSection(input: ReportInput, rows: UnifiedRecord
           column('records', 'Records', 'end'),
           column('unique', 'Unique', 'end'),
           column('matched', 'Matched', 'end'),
+          column('near', 'Near', 'end'),
+          column('unverified', 'Unverified', 'end'),
           column('metadata', 'Metadata', 'end'),
           column('conflicts', 'Conflicts', 'end'),
-          column('risk', input.detail.run.run_type === 'llm_audit' ? 'High risk' : 'Risk', 'end')
+          column('risk', input.detail.run.run_type === 'llm_audit' ? 'Severe metadata' : 'Risk', 'end')
         ],
         queryGroups.map(([key, queryRows]) => {
           const [queryId, entity] = key.split('::');
@@ -326,10 +332,12 @@ function buildPerQueryDiagnosticsSection(input: ReportInput, rows: UnifiedRecord
               records: integerLabel(queryRows.length),
               unique: integerLabel(new Set(queryRows.map(uniqueRecordKey)).size),
               matched: percentageLabel(ratio(queryRows.filter((row) => row.matched).length, queryRows.length)),
+              near: percentageLabel(ratio(queryRows.filter((row) => row.verification_status === 'near_match_suspected').length, queryRows.length)),
+              unverified: percentageLabel(ratio(queryRows.filter((row) => isUnverified(row)).length, queryRows.length)),
               metadata: percentageLabel(mean(queryRows.map(recordCompleteness))),
               conflicts: percentageLabel(ratio(queryRows.filter((row) => row.any_conflict).length, queryRows.length)),
               risk: input.detail.run.run_type === 'llm_audit'
-                ? percentageLabel(ratio(queryRows.filter((row) => row.hallucination_risk_bucket === 'high').length, queryRows.length))
+                ? percentageLabel(ratio(queryRows.filter((row) => row.metadata_risk_bucket === 'high').length, queryRows.length))
                 : '—'
             }
           };
@@ -1588,14 +1596,14 @@ function buildLlmHallucinationSection(rows: UnifiedRecordRow[]): ReportSection {
   const byEntity = sortedGroups(rows, (row) => row.model_or_platform);
   const heatmapRows = byEntity;
   const errorColumns = [
-    'unmatched',
+    'unverified',
+    'provider_failed',
+    'near_match',
     'invalid_doi',
     'title_mismatch',
+    'doi_conflict',
     'year_conflict',
-    'journal_conflict',
-    'author_conflict',
-    'publisher_conflict',
-    'high_risk'
+    'severe_metadata'
   ];
   const heatmapCells: ReportHeatmapCell[] = [];
   for (const [entity, entityRows] of heatmapRows) {
@@ -1617,13 +1625,13 @@ function buildLlmHallucinationSection(rows: UnifiedRecordRow[]): ReportSection {
     key: 'llm-hallucination',
     eyebrow: 'LLM Audit',
     title: 'Bibliographic Verifiability / Hallucination Risk',
-    description: 'This panel shows how often returned records could not be matched, carried invalid DOI structure, or disagreed with external metadata. Higher unmatched, invalid, conflict, or high-risk shares suggest greater bibliographic fabrication or unverifiability risk.',
+    description: 'This panel separates hard verification, near matches, unresolved records, and metadata severity so the report does not collapse provider uncertainty and bibliographic distortion into a single risk bucket.',
     status: 'available',
     cards: [
       card('matched', 'Matched rate', percentageLabel(ratio(rows.filter((row) => row.matched).length, rows.length))),
-      card('unmatched', 'Unmatched rate', percentageLabel(ratio(rows.filter((row) => !row.matched).length, rows.length))),
-      card('invalid', 'Invalid DOI rate', percentageLabel(ratio(rows.filter((row) => row.doi_valid === false).length, rows.length))),
-      card('high', 'High-risk share', percentageLabel(ratio(rows.filter((row) => row.hallucination_risk_bucket === 'high').length, rows.length)))
+      card('near', 'Near-match share', percentageLabel(ratio(rows.filter((row) => row.verification_status === 'near_match_suspected').length, rows.length))),
+      card('unverified', 'Unverified rate', percentageLabel(ratio(rows.filter((row) => isUnverified(row)).length, rows.length))),
+      card('high', 'Severe metadata', percentageLabel(ratio(rows.filter((row) => row.metadata_risk_bucket === 'high').length, rows.length)))
     ],
     heatmaps: [
       {
@@ -1640,20 +1648,22 @@ function buildLlmHallucinationSection(rows: UnifiedRecordRow[]): ReportSection {
         [
           column('model', 'Model'),
           column('matched', 'Matched', 'end'),
-          column('unmatched', 'Unmatched', 'end'),
+          column('near', 'Near', 'end'),
+          column('unverified', 'Unverified', 'end'),
+          column('provider_failed', 'Provider failed', 'end'),
           column('invalid_doi', 'Invalid DOI', 'end'),
-          column('any_conflict', 'Any conflict', 'end'),
-          column('high', 'High risk', 'end')
+          column('high', 'Severe metadata', 'end')
         ],
         byEntity.map(([entity, entityRows]) => ({
           key: entity,
           values: {
             model: entity,
             matched: percentageLabel(ratio(entityRows.filter((row) => row.matched).length, entityRows.length)),
-            unmatched: percentageLabel(ratio(entityRows.filter((row) => !row.matched).length, entityRows.length)),
+            near: percentageLabel(ratio(entityRows.filter((row) => row.verification_status === 'near_match_suspected').length, entityRows.length)),
+            unverified: percentageLabel(ratio(entityRows.filter((row) => isUnverified(row)).length, entityRows.length)),
+            provider_failed: percentageLabel(ratio(entityRows.filter((row) => row.verification_status === 'unverified_provider_failed').length, entityRows.length)),
             invalid_doi: percentageLabel(ratio(entityRows.filter((row) => row.doi_valid === false).length, entityRows.length)),
-            any_conflict: percentageLabel(ratio(entityRows.filter((row) => row.any_conflict).length, entityRows.length)),
-            high: percentageLabel(ratio(entityRows.filter((row) => row.hallucination_risk_bucket === 'high').length, entityRows.length))
+            high: percentageLabel(ratio(entityRows.filter((row) => row.metadata_risk_bucket === 'high').length, entityRows.length))
           }
         }))
       ),
@@ -1673,11 +1683,11 @@ function buildLlmHallucinationSection(rows: UnifiedRecordRow[]): ReportSection {
         rows
           .slice()
           .sort((left, right) => {
-            const riskScore = riskBucketScore(right.hallucination_risk_bucket) - riskBucketScore(left.hallucination_risk_bucket);
+            const riskScore = metadataRiskScore(right.metadata_risk_bucket) - metadataRiskScore(left.metadata_risk_bucket);
             if (riskScore !== 0) {
               return riskScore;
             }
-            return right.conflict_count - left.conflict_count;
+            return verificationStatusScore(right.verification_status) - verificationStatusScore(left.verification_status) || right.conflict_count - left.conflict_count;
           })
           .slice(0, 10)
           .map((row) => ({
@@ -1686,7 +1696,7 @@ function buildLlmHallucinationSection(rows: UnifiedRecordRow[]): ReportSection {
               model: row.model_or_platform,
               query: row.query_text,
               title: row.parsed_title || row.raw_title || '—',
-              risk: row.hallucination_risk_bucket || '—',
+              risk: row.verification_status || '—',
               reasons: row.risk_reasons.join(', ') || '—',
               matched: row.matched ? 'yes' : 'no',
               doi: row.doi_valid === null ? '—' : row.doi_valid ? 'yes' : 'no',
@@ -1696,7 +1706,7 @@ function buildLlmHallucinationSection(rows: UnifiedRecordRow[]): ReportSection {
       )
     ],
     notes: [
-      'Risk buckets are rule-based, not model-learned: unmatched records, invalid DOI structure, title mismatch, suspicious completeness, and multiple metadata conflicts increase the assigned risk level.'
+      'Hard verification and metadata severity are now shown separately. `Matched` means canonical external confirmation, `Near` captures strong candidate evidence with wrong or incomplete metadata, and `Unverified` means no adequate confirmation was found.'
     ]
   };
 }
@@ -1726,7 +1736,7 @@ function buildLlmQueryDetailsSection(input: ReportInput, rows: UnifiedRecordRow[
           column('parse', 'Parse mode'),
           column('results', 'Results', 'end'),
           column('verified', 'Verified', 'end'),
-          column('high_risk', 'High risk', 'end'),
+          column('unverified', 'Unverified', 'end'),
           column('latency', 'Latency', 'end'),
           column('tokens', 'Tokens', 'end')
         ],
@@ -1739,7 +1749,7 @@ function buildLlmQueryDetailsSection(input: ReportInput, rows: UnifiedRecordRow[
             parse: row.parseMode || (row.parseSuccess ? 'parsed' : 'failed'),
             results: integerLabel(row.resultCount),
             verified: integerLabel(row.verifiedCount),
-            high_risk: integerLabel(row.highRiskCount),
+            unverified: integerLabel(row.unverifiedCount),
             latency: row.latencyMs !== null ? integerLabel(row.latencyMs) : '—',
             tokens: row.totalTokens !== null ? integerLabel(row.totalTokens) : '—'
           }
@@ -1831,7 +1841,7 @@ function buildQueryModelDetails(calls: ReturnType<typeof filterCalls>, rows: Uni
       parsedItemCount: call.parsedItemCount,
       resultCount: matchedRows.length,
       verifiedCount: matchedRows.filter((row) => row.matched).length,
-      highRiskCount: matchedRows.filter((row) => row.hallucination_risk_bucket === 'high').length,
+      unverifiedCount: matchedRows.filter((row) => isUnverified(row)).length,
       latencyMs: call.latencyMs,
       totalTokens: call.totalTokens,
       errorMessage: call.errorMessage
@@ -2190,8 +2200,14 @@ function hallucinationErrorShare(rows: UnifiedRecordRow[], errorType: string): n
     return null;
   }
   const count = rows.filter((row) => {
-    if (errorType === 'unmatched') {
-      return !row.matched;
+    if (errorType === 'unverified') {
+      return isUnverified(row);
+    }
+    if (errorType === 'provider_failed') {
+      return row.verification_status === 'unverified_provider_failed';
+    }
+    if (errorType === 'near_match') {
+      return row.verification_status === 'near_match_suspected';
     }
     if (errorType === 'invalid_doi') {
       return row.doi_valid === false;
@@ -2199,27 +2215,21 @@ function hallucinationErrorShare(rows: UnifiedRecordRow[], errorType: string): n
     if (errorType === 'title_mismatch') {
       return row.title_match_status === 'no';
     }
+    if (errorType === 'doi_conflict') {
+      return row.verification_trace['doi_conflict'] === true;
+    }
     if (errorType === 'year_conflict') {
       return row.year_conflict;
     }
-    if (errorType === 'journal_conflict') {
-      return row.journal_conflict;
-    }
-    if (errorType === 'author_conflict') {
-      return row.author_conflict;
-    }
-    if (errorType === 'publisher_conflict') {
-      return row.publisher_conflict;
-    }
-    if (errorType === 'high_risk') {
-      return row.hallucination_risk_bucket === 'high';
+    if (errorType === 'severe_metadata') {
+      return row.metadata_risk_bucket === 'high';
     }
     return false;
   }).length;
   return ratio(count, rows.length);
 }
 
-function riskBucketScore(bucket: string | null): number {
+function metadataRiskScore(bucket: string | null): number {
   if (bucket === 'high') {
     return 3;
   }
@@ -2230,6 +2240,29 @@ function riskBucketScore(bucket: string | null): number {
     return 1;
   }
   return 0;
+}
+
+function verificationStatusScore(status: string | null): number {
+  if (status === 'unverified_not_found') {
+    return 5;
+  }
+  if (status === 'unverified_unknown' || status === 'unverified_provider_failed') {
+    return 4;
+  }
+  if (status === 'near_match_suspected') {
+    return 3;
+  }
+  if (status === 'verified_conflicted') {
+    return 2;
+  }
+  if (status === 'verified_exact') {
+    return 1;
+  }
+  return 0;
+}
+
+function isUnverified(row: UnifiedRecordRow): boolean {
+  return Boolean(row.verification_status?.startsWith('unverified_'));
 }
 
 function metadataCompleteness(row: ReportMergedRow): number | null {

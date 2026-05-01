@@ -11,8 +11,7 @@ import { RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
         <div>
           <h1>Bias Analysis</h1>
 <p>
-  A thesis-oriented tool for exploring bias in AI-based scientific literature search,
-  comparing scholarly retrieval results with outputs from OpenRouter language models.
+This application implements my master thesis: Design and Implementation of a Tool for Exploring Bias in AI-based Scientific Literature Search
 </p>
         </div>
         <nav class="shell__nav">
