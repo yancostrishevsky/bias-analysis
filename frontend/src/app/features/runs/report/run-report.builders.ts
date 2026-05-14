@@ -111,12 +111,12 @@ function buildSummarySection(input: ReportInput, rows: UnifiedRecordRow[]): Repo
     key: 'summary',
     eyebrow: 'Overview',
     title: 'Experiment Overview',
-    description: 'This summary reflects the current run scope and the core data quality context needed to interpret the bias panels below. Higher matched, DOI-valid, and completeness values generally indicate stronger downstream reliability.',
+    description: 'This summary reflects the current experiment scope and the core data quality context needed to interpret the bias panels below. Higher matched, DOI-valid, and completeness values generally indicate stronger downstream reliability.',
     status: rows.length ? 'available' : 'unavailable',
     reason: rows.length ? undefined : 'No result rows are available for the current filters.',
     cards: rows.length
       ? [
-          card('run-type', 'Run type', input.detail.run.run_type === 'llm_audit' ? 'LLM audit' : 'Scholarly'),
+          card('run-type', 'Experiment type', input.detail.run.run_type === 'llm_audit' ? 'LLM audit' : 'Scholarly'),
           card('queries', 'Queries', integerLabel(input.detail.queries.length)),
           card('entities', input.analysis.summary.entity_label + 's', integerLabel(entities)),
           card('records', 'Total records', integerLabel(rows.length)),
@@ -131,10 +131,10 @@ function buildSummarySection(input: ReportInput, rows: UnifiedRecordRow[]): Repo
         ]
       : [],
     notes: [
-      `${input.analysis.summary.entity_label}-level and query-level sections below use the same run, but expose grouped slices instead of relying only on pooled totals.`,
+      `${input.analysis.summary.entity_label}-level and query-level sections below use the same experiment, but expose grouped slices instead of relying only on pooled totals.`,
       input.detail.run.run_type === 'llm_audit'
         ? 'LLM-only diagnostics below depend on parse, enrichment, and verification coverage from unified record rows.'
-        : 'Scholarly runs share the same report structure where the underlying metrics exist.'
+        : 'Scholarly experiments share the same report structure where the underlying metrics exist.'
     ]
   };
 }
@@ -480,7 +480,7 @@ function buildOverlapSection(input: ReportInput, queryId: string | null): Report
     key: 'record-overlap',
     eyebrow: 'Record Overlap',
     title: 'Record Overlap',
-    description: 'Pairwise overlap heatmaps and comparison tables aligned across run modes.',
+    description: 'Pairwise overlap heatmaps and comparison tables aligned across experiment modes.',
     status: 'available',
     cards: [
       card('jaccard', 'Mean Jaccard', percentageLabel(mean(rows.map((row) => row.jaccard)))),
@@ -1363,7 +1363,7 @@ function buildAdditionalBiasSection(
 function buildLlmParseSection(input: ReportInput): ReportSection {
   const calls = filterCalls(input);
   if (!calls.length) {
-    return unavailableSection('llm-parse', 'LLM Audit', 'Parse Robustness', 'Parse quality diagnostics for llm_audit runs.', 'No LLM call rows are available for the current filters.');
+    return unavailableSection('llm-parse', 'LLM Audit', 'Parse Robustness', 'Parse quality diagnostics for llm_audit experiments.', 'No LLM call rows are available for the current filters.');
   }
 
   const strictCount = calls.filter((call) => call.parseMode === 'full_json').length;
@@ -1468,7 +1468,7 @@ function buildLlmStabilitySection(input: ReportInput): ReportSection {
       'LLM Audit',
       'Repeatability / Stability',
       'Repeated query-model executions are required for stability metrics.',
-      'Current llm_audit runs execute one call per query-model pair, so repeatability metrics are intentionally gated.'
+      'Current llm_audit experiments execute one call per query-model pair, so repeatability metrics are intentionally gated.'
     );
   }
 

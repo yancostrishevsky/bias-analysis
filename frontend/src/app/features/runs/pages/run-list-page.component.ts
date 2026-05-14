@@ -46,16 +46,16 @@ interface ModelPaginationSummary {
       <section class="panel panel--form">
         <div class="panel__header">
           <div>
-            <p class="eyebrow">Run Creation</p>
-            <h2>Create Run</h2>
-            <p>Create a persisted scholarly collection or multi-model LLM audit, then inspect the run detail page for live status and analysis.</p>
+            <p class="eyebrow">Experiment Creation</p>
+            <h2>Create Experiment</h2>
+            <p>Create a persisted scholarly collection or multi-model LLM audit, then inspect the experiment detail page for live status and analysis.</p>
           </div>
         </div>
 
         <form [formGroup]="createRunForm" (ngSubmit)="createRun()" class="form">
           <div class="form__row">
             <label>
-              <span>Run Type</span>
+              <span>Experiment Type</span>
               <select formControlName="runType">
                 <option *ngFor="let item of options?.supported_run_types ?? []" [value]="item">
                   {{ runTypeLabel(item) }}
@@ -121,7 +121,7 @@ interface ModelPaginationSummary {
           <section class="subpanel" *ngIf="isLlmAuditMode()">
             <div class="subpanel__header">
               <h3>LLM Models</h3>
-              <p>Fetch live OpenRouter models from the backend, then search and filter before selecting up to 10 for this run.</p>
+              <p>Fetch live OpenRouter models from the backend, then search and filter before selecting up to 10 for this experiment.</p>
             </div>
 
             <div class="model-toolbar">
@@ -291,7 +291,7 @@ interface ModelPaginationSummary {
           <section class="subpanel subpanel--queries">
             <div class="subpanel__header">
               <h3>Queries</h3>
-              <p>Enter one or many queries. Each row becomes a persisted query in the run, and the order is preserved.</p>
+              <p>Enter one or many queries. Each row becomes a persisted query in the experiment, and the order is preserved.</p>
             </div>
 
             <div class="query-editor">
@@ -344,7 +344,7 @@ interface ModelPaginationSummary {
           </section>
 
           <div class="form__actions">
-            <button type="submit" [disabled]="submitting || loadingOptions">Create run</button>
+            <button type="submit" [disabled]="submitting || loadingOptions">Create experiment</button>
             <span class="hint" *ngIf="isScholarlyMode()">
               Enabled enrichment order: {{ enabledEnrichmentProviderLabels().join(' → ') || 'none' }}
             </span>
@@ -358,9 +358,9 @@ interface ModelPaginationSummary {
       <section class="panel panel--list">
         <div class="panel__header">
           <div>
-            <p class="eyebrow">Persisted Runs</p>
-            <h2>Runs</h2>
-            <p>Each run keeps its status, artifacts, and downstream analysis. Delete is available for any run status, including stuck runs.</p>
+            <p class="eyebrow">Persisted Experiments</p>
+            <h2>Experiments</h2>
+            <p>Each experiment keeps its status, artifacts, and downstream analysis. Delete is available for any experiment status, including stuck experiments.</p>
           </div>
           <button type="button" class="secondary" (click)="loadRuns()" [disabled]="loadingRuns">
             Refresh
@@ -386,7 +386,7 @@ interface ModelPaginationSummary {
               </div>
 
               <div class="run-card__actions">
-                <a [routerLink]="['/runs', item.run.id]">Open run</a>
+                <a [routerLink]="['/runs', item.run.id]">Open experiment</a>
                 <button
                   type="button"
                   class="secondary danger"
@@ -1103,7 +1103,7 @@ export class RunListPageComponent implements OnInit {
         this.loadingOptions = false;
       },
       error: (error: unknown) => {
-        this.optionsError = this.formatError(error, 'Failed to load run options.');
+        this.optionsError = this.formatError(error, 'Failed to load experiment options.');
         this.loadingOptions = false;
       }
     });
@@ -1187,7 +1187,7 @@ export class RunListPageComponent implements OnInit {
         void this.router.navigate(['/runs', detail.run.id, 'report']);
       },
       error: (error: unknown) => {
-        this.submitError = this.formatError(error, 'Failed to create run.');
+        this.submitError = this.formatError(error, 'Failed to create experiment.');
         this.submitting = false;
       }
     });
@@ -1195,7 +1195,7 @@ export class RunListPageComponent implements OnInit {
 
   protected deleteRun(item: RunDetail): void {
     const confirmed = window.confirm(
-      `Delete run ${item.run.id}? This removes the run record, results, and saved artifacts.`,
+      `Delete experiment ${item.run.id}? This removes the experiment record, results, and saved artifacts.`,
     );
     if (!confirmed) {
       return;
@@ -1211,7 +1211,7 @@ export class RunListPageComponent implements OnInit {
       },
       error: (error: unknown) => {
         this.deletingRunIds.delete(item.run.id);
-        this.loadError = this.formatError(error, 'Failed to delete run.');
+        this.loadError = this.formatError(error, 'Failed to delete experiment.');
       }
     });
   }

@@ -36,7 +36,7 @@ interface DocFaqItem {
       <aside class="toc panel">
         <p class="eyebrow">Documentation</p>
         <h2>On This Page</h2>
-        <p class="toc__intro">This guide reflects the currently implemented run, report, and records workflow in the app.</p>
+        <p class="toc__intro">This guide reflects the currently implemented experiment, report, and records workflow in the app.</p>
         <nav class="toc__nav">
           <a *ngFor="let item of navItems" routerLink="/docs" [fragment]="item.id">{{ item.label }}</a>
         </nav>
@@ -49,13 +49,13 @@ interface DocFaqItem {
               <p class="eyebrow">Research Guide</p>
               <h1>Using Bias Analysis as a Research Tool</h1>
               <p class="hero__lede">
-                Bias Analysis supports structured retrieval experiments, LLM audit runs, bibliographic enrichment,
+                Bias Analysis supports structured retrieval experiments, LLM audit experiments, bibliographic enrichment,
                 bias analysis, row-level inspection, and export-ready datasets. The app is designed to help you compare
                 scholarly retrieval systems and LLM-based retrieval with traceable evidence instead of only pooled summaries.
               </p>
             </div>
             <div class="hero__actions">
-              <a class="nav-button" routerLink="/runs">Open Runs</a>
+              <a class="nav-button" routerLink="/runs">Open Experiments</a>
             
             </div>
           </div>
@@ -63,7 +63,7 @@ interface DocFaqItem {
           <div class="quick-links">
             <article class="quick-link-card">
               <p class="eyebrow eyebrow--compact">Create</p>
-              <h3>Create a Run</h3>
+              <h3>Create an Experiment</h3>
               <p>Choose <code>scholarly</code> or <code>llm_audit</code>, select sources or models, define queries, and start the experiment.</p>
             </article>
             <article class="quick-link-card">
@@ -104,14 +104,14 @@ interface DocFaqItem {
 
         <section class="panel" id="run-types">
           <div class="section-heading">
-            <p class="eyebrow">Run Types</p>
+            <p class="eyebrow">Experiment Types</p>
             <h2>Scholarly vs LLM Audit</h2>
-            <p>The app supports two run modes that share the same reporting structure where possible.</p>
+            <p>The app supports two experiment modes that share the same reporting structure where possible.</p>
           </div>
           <div class="two-column-grid">
             <article class="info-card">
               <h3>Scholarly</h3>
-              <p>Scholarly runs query selected scholarly sources such as OpenAlex, Semantic Scholar, Scopus, and CORE, then enrich and analyze the returned records.</p>
+              <p>Scholarly experiments query selected scholarly sources such as OpenAlex, Semantic Scholar, Scopus, and CORE, then enrich and analyze the returned records.</p>
               <ul class="plain-list">
                 <li>Best for comparing retrieval platforms and source-specific bias.</li>
                 <li>Shared report sections focus on coverage, overlap, language, publisher, geo, OA, recency, citation, source type, and diversity.</li>
@@ -120,7 +120,7 @@ interface DocFaqItem {
             </article>
             <article class="info-card">
               <h3>LLM Audit</h3>
-              <p>LLM audit runs ask multiple selected OpenRouter models to return literature, then parse, enrich, verify, and compare those outputs.</p>
+              <p>LLM audit experiments ask multiple selected OpenRouter models to return literature, then parse, enrich, verify, and compare those outputs.</p>
               <ul class="plain-list">
                 <li>Best for cross-model comparison, bibliographic quality assessment, and verifiability analysis.</li>
                 <li>Includes all shared report sections plus LLM-only panels such as Parse Robustness, Cross-Model Divergence, Stability, and Verifiability / Hallucination Risk.</li>
@@ -136,7 +136,7 @@ interface DocFaqItem {
             <h2>What the Report Page Is For</h2>
             <p>
               The report page is the interpretation surface. It is meant for comparison, pattern detection, and
-              identifying potential bias or quality issues across runs, models, platforms, and queries.
+              identifying potential bias or quality issues across experiments, models, platforms, and queries.
             </p>
           </div>
           <div class="content-stack">
@@ -147,7 +147,7 @@ interface DocFaqItem {
               coverage state instead of rendering a misleading chart.
             </p>
             <p>
-              Shared sections render for both <code>scholarly</code> and <code>llm_audit</code> runs when the underlying data exists. LLM-only
+              Shared sections render for both <code>scholarly</code> and <code>llm_audit</code> experiments when the underlying data exists. LLM-only
               sections render only for <code>llm_audit</code>. Use the report to identify suspicious patterns first, then move into
               the Records Explorer to inspect the underlying rows.
             </p>
@@ -277,7 +277,7 @@ interface DocFaqItem {
           </div>
           <ul class="plain-list">
             <li>metadata coverage is too sparse for a stable comparison</li>
-            <li>the run type does not support the metric</li>
+            <li>the experiment type does not support the metric</li>
             <li>only one repetition exists, so stability cannot be estimated</li>
             <li>prestige metadata such as CORE or JIF is not available</li>
             <li>institution taxonomy is not available even if affiliation text exists</li>
@@ -309,11 +309,11 @@ interface DocFaqItem {
             <p>This path works well for demos, pilot studies, and thesis evaluation sessions.</p>
           </div>
           <ol class="step-list">
-            <li>Create one <code>scholarly</code> run using the same query set across multiple scholarly sources.</li>
-            <li>Create one <code>llm_audit</code> run using the same query set across multiple LLM models.</li>
+            <li>Create one <code>scholarly</code> experiment using the same query set across multiple scholarly sources.</li>
+            <li>Create one <code>llm_audit</code> experiment using the same query set across multiple LLM models.</li>
             <li>Open both report pages and compare shared sections such as language, publisher, geo, OA, recency, citation, and source-type patterns.</li>
             <li>Use Record Overlap and Cross-Model Divergence to see where systems agree or diverge.</li>
-            <li>Inspect Bibliographic Quality and Bibliographic Verifiability / Hallucination Risk for the LLM run.</li>
+            <li>Inspect Bibliographic Quality and Bibliographic Verifiability / Hallucination Risk for the LLM experiment.</li>
             <li>Open the Records Explorer for suspicious subsets, such as one model with high conflict rate or a publisher skew.</li>
             <li>Export the filtered rows you want to analyze further in external notebooks, spreadsheets, or statistical tools.</li>
           </ol>
@@ -599,7 +599,7 @@ export class DocsPageComponent {
   protected readonly navItems: DocNavItem[] = [
     { id: 'overview', label: 'Overview' },
     { id: 'quick-start', label: 'Quick Start' },
-    { id: 'run-types', label: 'Run Types' },
+    { id: 'run-types', label: 'Experiment Types' },
     { id: 'report-page', label: 'Report Page' },
     { id: 'records-explorer', label: 'Records Explorer' },
     { id: 'exports', label: 'Exports' },
@@ -630,10 +630,10 @@ export class DocsPageComponent {
   ];
 
   protected readonly quickStartSteps: string[] = [
-    'Open the Runs page and create a new run.',
+    'Open the Experiments page and create a new experiment.',
     'Choose `scholarly` for source comparison or `llm_audit` for model comparison.',
     'Select the relevant scholarly sources or LLM models and provide your query set.',
-    'Start the run and monitor live execution status on the run detail page.',
+    'Start the experiment and monitor live execution status on the experiment detail page.',
     'Open the report to compare grouped metrics across models, platforms, and queries.',
     'Open the Records Explorer to inspect suspicious rows, conflicts, and verification outcomes.',
     'Export the filtered dataset you need for notebooks, spreadsheets, or further research analysis.'
@@ -642,15 +642,15 @@ export class DocsPageComponent {
   protected readonly metricSections: DocMetricSection[] = [
     {
       title: 'Summary / Experiment Overview',
-      scope: 'Run-level overview for both run modes.',
-      measures: 'Run type, number of queries, number of models or platforms, total records, top-k, enrichment context, and high-level run composition.',
+      scope: 'Experiment-level overview for both run modes.',
+      measures: 'Experiment type, number of queries, number of models or platforms, total records, top-k, enrichment context, and high-level run composition.',
       reveals: 'Whether the experiment scope is broad enough and whether later comparisons are based on a meaningful number of entities and queries.',
-      interpretation: 'Use this first to confirm what the run actually contains before reading any bias or quality charts.',
-      gating: 'Usually available once a run has results; some counts may depend on enrichment or verification completion.'
+      interpretation: 'Use this first to confirm what the experiment actually contains before reading any bias or quality charts.',
+      gating: 'Usually available once an experiment has results; some counts may depend on enrichment or verification completion.'
     },
     {
       title: 'Per-Model / Per-Platform Summary',
-      scope: 'Grouped by model in `llm_audit` and by source or platform in `scholarly` runs.',
+      scope: 'Grouped by model in `llm_audit` and by source or platform in `scholarly` experiments.',
       measures: 'Returned records, unique records, average results per query, DOI rate, metadata completeness, missingness, known language and country rates, OA coverage, conflict rate, and verification profile.',
       reveals: 'Which systems are richer, sparser, noisier, or riskier before deeper section-by-section analysis.',
       interpretation: 'Higher completeness or DOI validity is usually better; higher conflict or high-risk share is usually worse and worth drilling into.',
@@ -774,7 +774,7 @@ export class DocsPageComponent {
       measures: 'Raw success, strict JSON success, fallback parsing, malformed outputs, and parse failure patterns.',
       reveals: 'How reliably each model produces machine-readable outputs that can be analyzed downstream.',
       interpretation: 'Higher parse success is better. High fallback or parse-failure rates indicate fragile output formatting.',
-      gating: 'Only available for `llm_audit` runs with recorded LLM call rows.'
+      gating: 'Only available for `llm_audit` experiments with recorded LLM call rows.'
     },
     {
       title: 'Cross-Model Divergence',
@@ -782,7 +782,7 @@ export class DocsPageComponent {
       measures: 'Jaccard overlap, overlap@k, top-1 agreement, and related pairwise disagreement signals.',
       reveals: 'How much LLMs disagree on what literature is most relevant.',
       interpretation: 'Higher overlap means more agreement; lower overlap indicates stronger divergence or model-specific retrieval behavior.',
-      gating: 'Requires at least two comparable models in the run.'
+      gating: 'Requires at least two comparable models in the experiment.'
     },
     {
       title: 'Repeatability / Stability',
@@ -790,7 +790,7 @@ export class DocsPageComponent {
       measures: 'How similar outputs remain across repeated calls for the same query-model pair.',
       reveals: 'Whether the same model behaves consistently or drifts between repetitions.',
       interpretation: 'Higher stability suggests more reproducible outputs. Lower stability means more sensitivity to repeated execution.',
-      gating: 'Unavailable when the run has only one call per query-model pair.'
+      gating: 'Unavailable when the experiment has only one call per query-model pair.'
     },
     {
       title: 'Bibliographic Quality',
@@ -822,14 +822,14 @@ export class DocsPageComponent {
       measures: 'Prompt or query text, parsed items, result counts, verification outcomes, and model-specific query behavior.',
       reveals: 'Whether the observed behavior is consistent across prompts or dominated by a few difficult queries.',
       interpretation: 'Use this when one query appears to drive a surprising aggregate pattern elsewhere in the report.',
-      gating: 'Only available for `llm_audit` runs with stored call rows.'
+      gating: 'Only available for `llm_audit` experiments with stored call rows.'
     }
   ];
 
   protected readonly faqItems: DocFaqItem[] = [
     {
       question: 'Why is a section unavailable?',
-      answer: 'The current filters, run type, or metadata coverage may not support that metric. The app gates sections instead of rendering potentially misleading charts.'
+      answer: 'The current filters, experiment type, or metadata coverage may not support that metric. The app gates sections instead of rendering potentially misleading charts.'
     },
     {
       question: 'Why do some counts change after enrichment?',

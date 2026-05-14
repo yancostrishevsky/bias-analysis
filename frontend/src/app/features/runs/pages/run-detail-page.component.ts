@@ -33,15 +33,15 @@ import { EnrichmentRow } from '../report/run-report.models';
   imports: [CommonModule, RouterLink, RunReportComponent],
   template: `
     <div class="page">
-      <p class="back-link"><a routerLink="/runs">← Back to runs</a></p>
+      <p class="back-link"><a routerLink="/runs">← Back to experiments</a></p>
 
       <section class="hero panel" *ngIf="detail; else loadingBlock">
         <div class="hero__header">
           <div class="hero__intro">
-            <p class="eyebrow">Run Detail</p>
+            <p class="eyebrow">Experiment Detail</p>
             <h2>{{ detail.run.id }}</h2>
             <p>
-              {{ detail.run.run_type === 'llm_audit' ? 'LLM audit run' : 'Scholarly collection run' }}
+              {{ detail.run.run_type === 'llm_audit' ? 'LLM audit experiment' : 'Scholarly collection experiment' }}
               with persisted execution state, artifacts, and interactive analysis.
             </p>
           </div>
@@ -51,7 +51,7 @@ import { EnrichmentRow } from '../report/run-report.models';
               type="button"
               (click)="startRun()"
               [disabled]="starting || detail.run.status !== 'pending'">
-              Start run
+              Start experiment
             </button>
 
             <button
@@ -83,7 +83,7 @@ import { EnrichmentRow } from '../report/run-report.models';
               class="danger"
               (click)="deleteRun()"
               [disabled]="deleting">
-              {{ deleting ? 'Deleting…' : 'Delete run' }}
+              {{ deleting ? 'Deleting…' : 'Delete experiment' }}
             </button>
           </div>
         </div>
@@ -160,7 +160,7 @@ import { EnrichmentRow } from '../report/run-report.models';
             <strong class="status status--{{ detail.run.status }}">{{ detail.run.status }}</strong>
           </div>
           <div class="summary-card">
-            <span>Run Type</span>
+            <span>Experiment Type</span>
             <strong>{{ detail.run.run_type === 'llm_audit' ? 'LLM Audit' : 'Scholarly' }}</strong>
           </div>
           <div class="summary-card">
@@ -291,8 +291,8 @@ import { EnrichmentRow } from '../report/run-report.models';
 
       <ng-template #loadingBlock>
         <section class="panel">
-          <h2>Run Details</h2>
-          <p>{{ loadingRun ? 'Loading run...' : 'Run not available.' }}</p>
+          <h2>Experiment Details</h2>
+          <p>{{ loadingRun ? 'Loading experiment...' : 'Experiment not available.' }}</p>
           <p class="error" *ngIf="runError">{{ runError }}</p>
         </section>
       </ng-template>
@@ -1228,7 +1228,7 @@ export class RunDetailPageComponent implements OnInit {
         this.syncPolling();
       },
       error: (error: unknown) => {
-        this.runError = this.formatError(error, 'Failed to load run details.');
+        this.runError = this.formatError(error, 'Failed to load experiment details.');
         this.loadingRun = false;
         this.syncPolling();
       }
@@ -1368,7 +1368,7 @@ export class RunDetailPageComponent implements OnInit {
           stage: 'initializing',
           progress_current: 0,
           progress_total: this.detail.queries.length || this.detail.run.progress_total,
-          progress_message: 'Preparing run execution'
+          progress_message: 'Preparing experiment execution'
         }
       };
     }
@@ -1381,7 +1381,7 @@ export class RunDetailPageComponent implements OnInit {
         this.refreshAll();
       },
       error: (error: unknown) => {
-        this.actionError = this.formatError(error, 'Failed to start run.');
+        this.actionError = this.formatError(error, 'Failed to start experiment.');
         this.starting = false;
         this.syncPolling();
       }
@@ -1456,7 +1456,7 @@ export class RunDetailPageComponent implements OnInit {
     }
 
     const confirmed = window.confirm(
-      `Delete run ${this.detail.run.id}? This removes the run record, results, and saved artifacts.`,
+      `Delete experiment ${this.detail.run.id}? This removes the experiment record, results, and saved artifacts.`,
     );
     if (!confirmed) {
       return;
@@ -1472,7 +1472,7 @@ export class RunDetailPageComponent implements OnInit {
         void this.router.navigate(['/runs']);
       },
       error: (error: unknown) => {
-        this.actionError = this.formatError(error, 'Failed to delete run.');
+        this.actionError = this.formatError(error, 'Failed to delete experiment.');
         this.deleting = false;
       }
     });
@@ -1521,21 +1521,21 @@ export class RunDetailPageComponent implements OnInit {
 
   protected defaultProgressMessage(): string {
     if (!this.detail) {
-      return 'Waiting for run details';
+      return 'Waiting for experiment details';
     }
     if (this.detail.run.status === 'pending') {
-      return 'Run is ready to start';
+      return 'Experiment is ready to start';
     }
     if (this.detail.run.status === 'running') {
-      return 'Run is in progress';
+      return 'Experiment is in progress';
     }
     if (this.detail.run.status === 'completed') {
-      return 'Run completed successfully';
+      return 'Experiment completed successfully';
     }
     if (this.detail.run.status === 'partial') {
-      return 'Run completed with partial failures';
+      return 'Experiment completed with partial failures';
     }
-    return this.detail.run.error_message || 'Run failed';
+    return this.detail.run.error_message || 'Experiment failed';
   }
 
   protected canReplay(): boolean {
@@ -1821,7 +1821,7 @@ export class RunDetailPageComponent implements OnInit {
 
     forkJoin({
       detail: this.runsApi.getRun(this.runId).pipe(catchError((error: unknown) => {
-        this.runError = this.formatError(error, 'Failed to load run details.');
+        this.runError = this.formatError(error, 'Failed to load experiment details.');
         return of<RunDetail | null>(null);
       })),
       results: this.runsApi.getResults(this.runId).pipe(catchError((error: unknown) => {

@@ -24,7 +24,7 @@ type SortKey =
   imports: [CommonModule, RouterLink],
   template: `
     <div class="page">
-      <p class="back-link"><a routerLink="/runs">← Back to runs</a></p>
+      <p class="back-link"><a routerLink="/runs">← Back to experiments</a></p>
 
       <section class="panel" *ngIf="detail">
         <div class="hero__header">
@@ -40,7 +40,7 @@ type SortKey =
 
         <div class="summary-grid">
           <div class="summary-card">
-            <span>Run Type</span>
+            <span>Experiment Type</span>
             <strong>{{ detail.run.run_type }}</strong>
           </div>
           <div class="summary-card">
@@ -436,7 +436,7 @@ export class RunRecordsPageComponent implements OnInit {
         this.detail = detail;
       },
       error: (error: unknown) => {
-        this.recordsError = this.formatError(error, 'Failed to load run details.');
+        this.recordsError = this.formatError(error, 'Failed to load experiment details.');
       }
     });
   }
