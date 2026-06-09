@@ -555,6 +555,43 @@ class Repository:
             for row in rows
         ]
 
+    def list_results_in_persistence_order(self, run_id: UUID) -> list[ResultRecord]:
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM result_records
+                WHERE run_id = ?
+                ORDER BY rowid ASC
+                """,
+                (str(run_id),),
+            ).fetchall()
+        return [
+            ResultRecord(
+                id=UUID(row["id"]),
+                run_id=UUID(row["run_id"]),
+                query_id=UUID(row["query_id"]),
+                llm_call_id=UUID(row["llm_call_id"]) if row["llm_call_id"] else None,
+                origin_type=row["origin_type"],
+                source_name=row["source_name"],
+                model_name=row["model_name"],
+                provider_name=row["provider_name"],
+                execution_status=row["execution_status"],
+                rank=row["rank"],
+                canonical_identifier=row["canonical_identifier"],
+                title=row["title"],
+                doi=row["doi"],
+                url=row["url"],
+                source_identifier=row["source_identifier"],
+                year=row["year"],
+                authors=_json_loads(row["authors_json"], default=[]),
+                venue=row["venue"],
+                publisher=row["publisher"],
+                language=row["language"],
+                raw_payload=_json_loads(row["raw_payload"], default={}),
+            )
+            for row in rows
+        ]
+
     def replace_enrichments(
         self,
         result_record_id: UUID,

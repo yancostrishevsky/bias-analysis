@@ -22,12 +22,14 @@ from backend.application.run_recovery import (
 )
 from backend.application.run_executor import (
     InvalidRunModelSelectionError,
+    UnsupportedDownstreamResumeError,
     UnsupportedArtifactReplayError,
     UnsupportedModelRetryError,
     UnsupportedRunSourceError,
     execute_run,
     normalize_run_sources,
     replay_llm_run_from_artifacts,
+    resume_run_downstream,
     retry_llm_model,
 )
 from backend.config import OpenRouterModelOption, ScholarlySourceOption, get_settings
@@ -618,6 +620,23 @@ def replay_llm_artifacts(run_id: UUID) -> RunDetail:
     try:
         replay_llm_run_from_artifacts(repository=repository, run=run, queries=queries)
     except UnsupportedArtifactReplayError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+    return repository.get_run_detail(run_id)
+
+
+@router.post("/{run_id}/resume-downstream", response_model=RunDetail)
+def resume_downstream(run_id: UUID) -> RunDetail:
+    """Resume enrichment and analysis from persisted result rows."""
+
+    repository = _repository()
+    run = _get_run_or_404(repository, run_id)
+    queries = repository.list_queries(run.id)
+    try:
+        resume_run_downstream(repository=repository, run=run, queries=queries)
+    except UnsupportedDownstreamResumeError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=str(exc),

@@ -3,7 +3,8 @@
   "version": "0.0.1",
   "private": true,
   "scripts": {
-    "start": "ng serve",
+    "start": "ng serve --poll 1000",
+    "start:native": "ng serve",
     "build": "ng build"
   },
   "dependencies": {

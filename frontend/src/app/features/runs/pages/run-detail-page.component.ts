@@ -66,8 +66,16 @@ import { EnrichmentRow } from '../report/run-report.models';
             <button
               type="button"
               class="secondary"
+              (click)="resumeDownstream()"
+              [disabled]="resumingDownstream || !canResumeDownstream()">
+              {{ resumingDownstream ? 'Resuming…' : 'Resume enrichment' }}
+            </button>
+
+            <button
+              type="button"
+              class="secondary"
               (click)="refreshAll()"
-              [disabled]="loadingRun || loadingResults || loadingEnrichments || loadingAnalysis">
+              [disabled]="loadingRun || loadingResults || loadingEnrichments || loadingAnalysis || resumingDownstream">
               Refresh
             </button>
 
@@ -1155,6 +1163,7 @@ export class RunDetailPageComponent implements OnInit {
   protected loadingReplayStatus = false;
   protected starting = false;
   protected replaying = false;
+  protected resumingDownstream = false;
   protected deleting = false;
   protected retryingModelIds = new Set<string>();
   protected runError = '';
@@ -1411,6 +1420,42 @@ export class RunDetailPageComponent implements OnInit {
     });
   }
 
+  protected resumeDownstream(): void {
+    if (!this.runId || !this.canResumeDownstream()) {
+      return;
+    }
+
+    this.resumingDownstream = true;
+    this.actionError = '';
+    this.actionNotice = '';
+    if (this.detail) {
+      this.detail = {
+        ...this.detail,
+        run: {
+          ...this.detail.run,
+          status: 'running',
+          stage: 'enrichment',
+          progress_message: this.detail.run.progress_message || 'Resuming enrichment'
+        }
+      };
+    }
+    this.syncPolling();
+
+    this.runsApi.resumeDownstream(this.runId).subscribe({
+      next: (detail) => {
+        this.detail = detail;
+        this.resumingDownstream = false;
+        this.actionNotice = 'Enrichment and analysis resumed from stored result records. No new LLM API calls were made.';
+        this.refreshAll();
+      },
+      error: (error: unknown) => {
+        this.actionError = this.formatError(error, 'Failed to resume enrichment.');
+        this.resumingDownstream = false;
+        this.syncPolling();
+      }
+    });
+  }
+
   protected retryModel(item: EntityExecutionSummary): void {
     if (!this.runId || !this.detail || !this.canRetryModel(item)) {
       return;
@@ -1546,6 +1591,21 @@ export class RunDetailPageComponent implements OnInit {
     );
   }
 
+  protected canResumeDownstream(): boolean {
+    if (!this.detail || this.results.length === 0) {
+      return false;
+    }
+
+    const status = this.detail.run.status;
+    const stage = this.detail.run.stage;
+    return (
+      status === 'partial' ||
+      status === 'failed' ||
+      status === 'completed' ||
+      (status === 'running' && stage === 'enrichment')
+    );
+  }
+
   protected canRetryModel(item: EntityExecutionSummary): boolean {
     return Boolean(
       this.detail?.run.run_type === 'llm_audit' &&
@@ -1571,6 +1631,9 @@ export class RunDetailPageComponent implements OnInit {
     }
     if (this.replayStatus?.current_output_source === 'fresh_execution') {
       return 'Fresh execution';
+    }
+    if (this.replayStatus?.current_output_source === 'downstream_resume') {
+      return 'Downstream resume';
     }
     return 'Unknown';
   }
@@ -1790,7 +1853,7 @@ export class RunDetailPageComponent implements OnInit {
       return false;
     }
     const status = this.detail?.run.status;
-    return this.starting || this.retryingModelIds.size > 0 || status === 'pending' || status === 'running';
+    return this.starting || this.resumingDownstream || this.retryingModelIds.size > 0 || status === 'pending' || status === 'running';
   }
 
   private syncPolling(): void {

@@ -12,39 +12,81 @@ import { ReportSectionComponent } from './report-section.component';
   imports: [CommonModule, ReportSectionComponent],
   template: `
     <ng-container *ngIf="reportView as report">
-      <app-report-section *ngFor="let section of report.sharedSections" [section]="section"></app-report-section>
-
-      <section class="panel panel--muted" *ngIf="report.llmSections.length">
-        <div class="panel__header">
-          <div>
-            <p class="eyebrow">LLM Audit</p>
-            <h2>LLM-Only Panels</h2>
-            <p>Sections that only render for llm_audit runs, while preserving the shared report structure above.</p>
+      <div class="report-layout">
+        <aside class="panel report-toc" aria-labelledby="report-toc-heading">
+          <div class="panel__header">
+            <div>
+              <p class="eyebrow">Report Navigation</p>
+              <h2 id="report-toc-heading">Table of contents</h2>
+              <p>Jump to a report section.</p>
+            </div>
           </div>
-        </div>
 
-        <div class="section-stack">
-          <app-report-section *ngFor="let section of report.llmSections" [section]="section"></app-report-section>
-        </div>
-      </section>
+          <nav class="report-toc__nav" aria-label="Report table of contents">
+            <button
+              type="button"
+              *ngFor="let section of report.sharedSections"
+              (click)="scrollToSection(section.key)">
+              {{ section.title }}
+            </button>
+            <button
+              type="button"
+              *ngFor="let section of report.llmSections"
+              (click)="scrollToSection(section.key)">
+              {{ section.title }}
+            </button>
+          </nav>
+        </aside>
 
-      <section class="panel panel--muted" *ngIf="report.omittedSections.length">
-        <div class="panel__header">
-          <div>
-            <p class="eyebrow">Intentionally Omitted</p>
-            <h2>Removed From Migration</h2>
-            <p>Legacy panels that are explicitly not carried into the new UI.</p>
-          </div>
-        </div>
+        <div class="report-content">
+          <app-report-section *ngFor="let section of report.sharedSections" [section]="section"></app-report-section>
 
-        <ul class="omitted-list">
-          <li *ngFor="let item of report.omittedSections">{{ item }}</li>
-        </ul>
-      </section>
+          <section class="panel panel--muted" *ngIf="report.llmSections.length">
+            <div class="panel__header">
+              <div>
+                <p class="eyebrow">LLM Audit</p>
+                <h2>LLM-Only Panels</h2>
+                <p>Sections that only render for llm_audit runs, while preserving the shared report structure above.</p>
+              </div>
+            </div>
+
+            <div class="section-stack">
+              <app-report-section *ngFor="let section of report.llmSections" [section]="section"></app-report-section>
+            </div>
+          </section>
+
+          <section class="panel panel--muted" *ngIf="report.omittedSections.length">
+            <div class="panel__header">
+              <div>
+                <p class="eyebrow">Intentionally Omitted</p>
+                <h2>Removed From Migration</h2>
+                <p>Legacy panels that are explicitly not carried into the new UI.</p>
+              </div>
+            </div>
+
+            <ul class="omitted-list">
+              <li *ngFor="let item of report.omittedSections">{{ item }}</li>
+            </ul>
+          </section>
+        </div>
+      </div>
     </ng-container>
   `,
   styles: [`
     :host {
+      display: block;
+      min-width: 0;
+    }
+
+    .report-layout {
+      display: grid;
+      grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+      gap: 24px;
+      align-items: start;
+      min-width: 0;
+    }
+
+    .report-content {
       display: grid;
       gap: 24px;
       min-width: 0;
@@ -90,10 +132,69 @@ import { ReportSectionComponent } from './report-section.component';
       gap: 20px;
     }
 
+    .report-toc {
+      background: linear-gradient(180deg, rgba(251, 253, 255, 0.98), rgba(246, 249, 252, 0.96));
+      position: sticky;
+      top: 16px;
+      max-height: calc(100vh - 32px);
+      overflow-y: auto;
+    }
+
+    .report-toc__nav {
+      display: grid;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .report-toc__nav button {
+      border: 1px solid #dce5ed;
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.78);
+      color: #234f6c;
+      padding: 10px 12px;
+      font: inherit;
+      text-align: left;
+      cursor: pointer;
+      overflow-wrap: anywhere;
+    }
+
+    .report-toc__nav button:hover,
+    .report-toc__nav button:focus-visible {
+      border-color: #9fb6c8;
+      background: #ffffff;
+      color: #12324a;
+    }
+
     .omitted-list {
       margin: 0;
       padding-left: 18px;
       color: #556270;
+    }
+
+    @media (max-width: 960px) {
+      .report-layout {
+        grid-template-columns: 1fr;
+      }
+
+      .report-toc {
+        position: static;
+        max-height: none;
+        overflow-y: visible;
+      }
+
+      .report-toc__nav {
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+      }
+    }
+
+    @media (max-width: 600px) {
+      .panel {
+        padding: 16px;
+      }
+
+      .report-toc__nav {
+        grid-template-columns: 1fr;
+      }
     }
   `]
 })
@@ -105,6 +206,13 @@ export class RunReportComponent {
   @Input() selectedQueryId = '';
   @Input() selectedEntity = '';
   @Input() selectedTopK = 10;
+
+  protected scrollToSection(sectionKey: string): void {
+    document.getElementById(`report-${sectionKey}`)?.scrollIntoView({
+      behavior: 'smooth',
+      block: 'start'
+    });
+  }
 
   protected get reportView(): RunReportView {
     return buildRunReportView({

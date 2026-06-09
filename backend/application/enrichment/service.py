@@ -24,10 +24,13 @@ def enrich_results(
     results: Sequence[ResultRecord],
     progress_callback: Callable[[int, int, str], None] | None = None,
     artifacts: RunArtifactsWriter | None = None,
+    result_ordinals: dict[str, int] | None = None,
 ) -> dict[str, tuple[list[EnrichmentRecord], CanonicalEnrichment | None]]:
     """Build provider-specific and canonical enrichments for collected results."""
 
-    result_ordinals = {str(result.id): index for index, result in enumerate(results, start=1)}
+    result_ordinals = result_ordinals or {
+        str(result.id): index for index, result in enumerate(results, start=1)
+    }
     providers = build_enrichment_providers(
         repository,
         artifacts=artifacts,
@@ -45,12 +48,13 @@ def enrich_results(
         )
         repository.replace_enrichments(result.id, provider_records, canonical_enrichment)
         if artifacts is not None:
+            record_index = result_ordinals.get(str(result.id), index)
             artifacts.write_canonical_enrichment(
-                record_index=index,
+                record_index=record_index,
                 canonical_enrichment=canonical_enrichment,
             )
             artifacts.write_provenance(
-                record_index=index,
+                record_index=record_index,
                 canonical_enrichment=canonical_enrichment,
             )
             artifacts.append_event(

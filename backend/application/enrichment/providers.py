@@ -245,7 +245,18 @@ class BaseEnrichmentProvider:
             attempt_index=1,
             payload=payload,
         )
-        if status == ExecutionStatus.FAILED:
+        if status == ExecutionStatus.RUNNING:
+            self.artifacts.append_event(
+                stage="enrichment",
+                message=message or "Provider attempt started",
+                provider=self.provider.value,
+                result_record_id=str(result.id),
+                record_index=record_index,
+                status=status.value,
+                resolution_source=attempt.resolution_source,
+                cache_key=attempt.cache_key,
+            )
+        elif status == ExecutionStatus.FAILED:
             self.artifacts.append_error(
                 stage="enrichment",
                 message=message or "Provider attempt failed",

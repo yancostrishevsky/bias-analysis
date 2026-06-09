@@ -302,8 +302,7 @@ interface ModelPaginationSummary {
                     <button
                       type="button"
                       class="secondary button--small"
-                      (click)="removeQueryRow(index)"
-                      [disabled]="queryRows.length === 1">
+                      (click)="removeQueryRow(index)">
                       Remove
                     </button>
                   </div>
@@ -311,7 +310,7 @@ interface ModelPaginationSummary {
                     rows="3"
                     [value]="query"
                     (input)="updateQueryRow(index, $event)"
-                    placeholder="Example: systematic review of machine learning in radiology"></textarea>
+                    placeholder="Enter a research query…"></textarea>
                 </article>
               </div>
 
@@ -319,6 +318,10 @@ interface ModelPaginationSummary {
                 <button type="button" class="secondary" (click)="addQueryRow()">Add query row</button>
                 <span class="hint">Use concise search-like phrasing. One line equals one stored query.</span>
               </div>
+
+              <p class="query-validation" *ngIf="!hasValidQueries()">
+                Add at least one query to create a run.
+              </p>
 
               <div class="bulk-paste">
                 <label>
@@ -344,7 +347,11 @@ interface ModelPaginationSummary {
           </section>
 
           <div class="form__actions">
-            <button type="submit" [disabled]="submitting || loadingOptions">Create experiment</button>
+            <button
+              type="submit"
+              [disabled]="submitting || loadingOptions || !hasValidQueries()">
+              Create experiment
+            </button>
             <span class="hint" *ngIf="isScholarlyMode()">
               Enabled enrichment order: {{ enabledEnrichmentProviderLabels().join(' → ') || 'none' }}
             </span>
@@ -849,9 +856,15 @@ interface ModelPaginationSummary {
       font-size: 0.95rem;
     }
 
-    .error {
+    .error,
+    .query-validation {
       color: #b42318;
       margin-top: 4px;
+    }
+
+    .query-validation {
+      margin-bottom: 0;
+      font-size: 0.95rem;
     }
 
     .notice {
@@ -1061,10 +1074,7 @@ export class RunListPageComponent implements OnInit {
   protected options: RunOptionsResponse | null = null;
   protected openRouterModelsResponse: OpenRouterModelsResponse | null = null;
   protected runs: RunDetail[] = [];
-  protected queryRows = [
-    'liquid biopsy cancer detection review',
-    'systematic review of machine learning in radiology',
-  ];
+  protected queryRows: string[] = [];
   protected bulkQueryText = '';
   protected modelSearchText = '';
   protected modelModalityFilter = 'all';
@@ -1151,7 +1161,7 @@ export class RunListPageComponent implements OnInit {
   protected createRun(): void {
     const queries = this.normalizedQueries();
     if (!queries.length) {
-      this.submitError = 'Enter at least one query.';
+      this.submitError = 'Add at least one query to create a run.';
       return;
     }
 
@@ -1225,10 +1235,6 @@ export class RunListPageComponent implements OnInit {
   }
 
   protected removeQueryRow(index: number): void {
-    if (this.queryRows.length === 1) {
-      this.queryRows = [''];
-      return;
-    }
     this.queryRows = this.queryRows.filter((_, candidateIndex) => candidateIndex !== index);
   }
 
@@ -1246,6 +1252,10 @@ export class RunListPageComponent implements OnInit {
     }
     this.queryRows = queries;
     this.bulkQueryText = '';
+  }
+
+  protected hasValidQueries(): boolean {
+    return this.normalizedQueries().length > 0;
   }
 
   protected toggleSource(source: string, event: Event): void {

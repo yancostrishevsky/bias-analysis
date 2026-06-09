@@ -11,7 +11,7 @@ import { ReportMetricCardsComponent } from './report-metric-cards.component';
   standalone: true,
   imports: [CommonModule, ReportMetricCardsComponent, ReportHeatmapComponent, ReportDataTableComponent],
   template: `
-    <section class="panel">
+    <section class="panel" [attr.id]="'report-' + section.key">
       <div class="panel__header">
         <div>
           <p class="eyebrow">{{ section.eyebrow }}</p>
@@ -80,6 +80,7 @@ import { ReportMetricCardsComponent } from './report-metric-cards.component';
       display: grid;
       gap: 16px;
       min-width: 0;
+      scroll-margin-top: 16px;
     }
 
     .panel__header {

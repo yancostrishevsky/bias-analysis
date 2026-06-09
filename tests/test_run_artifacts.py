@@ -155,6 +155,65 @@ def test_enrich_results_writes_attempt_and_canonical_artifacts(
     assert provenance_payload["title"]["provider"] == "openalex"
 
 
+def test_enrich_results_uses_supplied_result_ordinals_for_canonical_artifacts(
+    repository: Repository,
+    monkeypatch,
+) -> None:
+    run = Run()
+    query = Query(run_id=run.id, text="bias in academic search", position=1)
+    repository.create_run(run, [query])
+    writer = get_run_artifacts_writer(run.id)
+    writer.initialize_run(
+        run=run,
+        queries=[query],
+        raw_create_payload={"run_type": "scholarly", "queries": [query.text]},
+        normalized_payload={"run_type": "scholarly", "sources": ["openalex"], "queries": [query.text]},
+    )
+    result = ResultRecord(
+        run_id=run.id,
+        query_id=query.id,
+        origin_type=ResultOriginType.SCHOLARLY_SOURCE,
+        source_name="openalex",
+        provider_name="openalex",
+        rank=5,
+        title="Ordinal Resume Result",
+        doi="10.1000/ordinal",
+        year=2024,
+        raw_payload={
+            "id": "https://openalex.org/W999",
+            "display_name": "Ordinal Resume Result",
+            "doi": "10.1000/ordinal",
+            "publication_year": 2024,
+        },
+    )
+    repository.save_results([result])
+
+    monkeypatch.setattr(
+        "backend.application.enrichment.service.build_enrichment_providers",
+        lambda repository, artifacts=None, result_ordinals=None: [
+            OpenAlexEnrichmentProvider(
+                repository=repository,
+                provider=EnrichmentProvider.OPENALEX,
+                settings=get_settings().openalex,
+                client=type("UnusedClient", (), {})(),
+                artifacts=artifacts,
+                result_ordinals=result_ordinals,
+            )
+        ],
+    )
+
+    enrich_results(
+        repository=repository,
+        results=[result],
+        artifacts=writer,
+        result_ordinals={str(result.id): 5},
+    )
+
+    assert not (writer.run_dir / "enrichment/record_001/canonical_enrichment.json").exists()
+    assert (writer.run_dir / "enrichment/record_005/canonical_enrichment.json").exists()
+    assert (writer.run_dir / "enrichment/record_005/provenance.json").exists()
+
+
 def test_semantic_scholar_failed_attempt_writes_error_context(
     repository: Repository,
 ) -> None:

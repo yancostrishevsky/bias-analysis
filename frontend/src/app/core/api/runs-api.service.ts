@@ -52,6 +52,10 @@ export class RunsApiService {
     return this.http.post<RunDetail>(`${this.apiBaseUrl}/runs/${runId}/replay-llm-artifacts`, {});
   }
 
+  resumeDownstream(runId: string): Observable<RunDetail> {
+    return this.http.post<RunDetail>(`${this.apiBaseUrl}/runs/${runId}/resume-downstream`, {});
+  }
+
   retryRunModel(runId: string, modelId: string): Observable<RunDetail> {
     return this.http.post<RunDetail>(
       `${this.apiBaseUrl}/runs/${runId}/models/${encodeURIComponent(modelId)}/retry`,

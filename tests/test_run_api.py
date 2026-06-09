@@ -22,6 +22,7 @@ from backend.api.routes.runs import (
     get_run_results,
     export_run_records_file,
     replay_llm_artifacts,
+    resume_downstream,
     retry_run_model,
     start_run,
 )
@@ -1942,6 +1943,193 @@ def test_replay_llm_artifacts_recovers_inactive_running_run_before_replay(
     assert replayed.run.stage == "done"
     assert [result.title for result in results] == ["Recovered Replay Result"]
     assert "Recovered inactive LLM run after process interruption" in replay_error["error_message"]
+
+
+def test_resume_downstream_uses_persisted_results_without_replaying_llm(
+    repository: Repository,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr("backend.api.routes.runs.get_repository", lambda: repository)
+
+    run = Run(run_type=RunType.LLM_AUDIT, selected_models=["model-a"], top_k=2)
+    query = Query(run_id=run.id, text="bias in academic search", position=1)
+    repository.create_run(run, [query])
+    run.status = RunStatus.RUNNING
+    run.stage = "enrichment"
+    run.progress_current = 1
+    run.progress_total = 2
+    run.progress_message = "Enriching 1/2"
+    repository.update_run(run)
+
+    llm_call = LLMCall(
+        run_id=run.id,
+        query_id=query.id,
+        model_name="model-a",
+        provider_name="openrouter",
+        status=ExecutionStatus.COMPLETED,
+        prompt_text="prompt",
+        parse_success=True,
+    )
+    repository.save_llm_call(llm_call)
+    enriched = ResultRecord(
+        run_id=run.id,
+        query_id=query.id,
+        llm_call_id=llm_call.id,
+        origin_type=ResultOriginType.LLM_RESPONSE,
+        model_name="model-a",
+        provider_name="openrouter",
+        rank=1,
+        title="Already Enriched",
+        year=2024,
+    )
+    pending = ResultRecord(
+        run_id=run.id,
+        query_id=query.id,
+        llm_call_id=llm_call.id,
+        origin_type=ResultOriginType.LLM_RESPONSE,
+        model_name="model-a",
+        provider_name="openrouter",
+        rank=2,
+        title="Needs Enrichment",
+        year=2023,
+    )
+    repository.save_results([enriched, pending])
+
+    provider_record = EnrichmentRecord(
+        result_record_id=enriched.id,
+        provider=EnrichmentProvider.OPENALEX,
+        provider_record_id="openalex:already",
+        status=ExecutionStatus.COMPLETED,
+        match_strategy=EnrichmentMatchStrategy.TITLE_YEAR,
+        title="Already Enriched",
+        publication_year=2024,
+    )
+    repository.replace_enrichments(
+        enriched.id,
+        [provider_record],
+        canonicalize_enrichment_records(
+            result_record_id=enriched.id,
+            records=[provider_record],
+        ),
+    )
+
+    resumed_titles: list[str] = []
+
+    def fake_enrich_results(
+        *,
+        repository: Repository,
+        results: list[ResultRecord],
+        progress_callback=None,
+        artifacts=None,
+        result_ordinals=None,
+    ):
+        resumed_titles.extend(result.title for result in results)
+        assert result_ordinals[str(pending.id)] == 2
+        if progress_callback is not None:
+            progress_callback(1, 1, "Enriching 1/1")
+        pending_record = EnrichmentRecord(
+            result_record_id=pending.id,
+            provider=EnrichmentProvider.OPENALEX,
+            provider_record_id="openalex:pending",
+            status=ExecutionStatus.COMPLETED,
+            match_strategy=EnrichmentMatchStrategy.TITLE_YEAR,
+            title="Needs Enrichment",
+            publication_year=2023,
+        )
+        repository.replace_enrichments(
+            pending.id,
+            [pending_record],
+            canonicalize_enrichment_records(
+                result_record_id=pending.id,
+                records=[pending_record],
+            ),
+        )
+        return {}
+
+    monkeypatch.setattr("backend.application.run_executor.enrich_results", fake_enrich_results)
+    monkeypatch.setattr(
+        "backend.application.run_executor.OpenRouterClient.from_settings",
+        lambda: (_ for _ in ()).throw(AssertionError("Resume should not call OpenRouter")),
+    )
+
+    resumed = resume_downstream(run.id)
+    enrichments = repository.list_enrichments_by_result(run.id)
+    analysis_metadata = _read_json(_artifact_dir(run.id) / "analysis/metadata.json")
+
+    assert resumed.run.status == "completed"
+    assert resumed.run.stage == "done"
+    assert resumed_titles == ["Needs Enrichment"]
+    assert len(enrichments[pending.id][0]) == 1
+    assert analysis_metadata["source"] == "downstream_resume"
+
+
+def test_resume_downstream_preserves_result_insertion_ordinals(
+    repository: Repository,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr("backend.api.routes.runs.get_repository", lambda: repository)
+
+    run = Run(run_type=RunType.LLM_AUDIT, selected_models=["model-b", "model-a"], top_k=2)
+    query = Query(run_id=run.id, text="bias in academic search", position=1)
+    repository.create_run(run, [query])
+    run.status = RunStatus.RUNNING
+    run.stage = "enrichment"
+    repository.update_run(run)
+
+    first = ResultRecord(
+        run_id=run.id,
+        query_id=query.id,
+        origin_type=ResultOriginType.LLM_RESPONSE,
+        model_name="model-b",
+        provider_name="openrouter",
+        rank=1,
+        title="Inserted First",
+    )
+    second = ResultRecord(
+        run_id=run.id,
+        query_id=query.id,
+        origin_type=ResultOriginType.LLM_RESPONSE,
+        model_name="model-a",
+        provider_name="openrouter",
+        rank=1,
+        title="Inserted Second",
+    )
+    repository.save_results([first, second])
+
+    seen_ordinals: dict[str, int] = {}
+
+    def fake_enrich_results(
+        *,
+        repository: Repository,
+        results: list[ResultRecord],
+        progress_callback=None,
+        artifacts=None,
+        result_ordinals=None,
+    ):
+        seen_ordinals.update({result.title: result_ordinals[str(result.id)] for result in results})
+        for result in results:
+            provider_record = EnrichmentRecord(
+                result_record_id=result.id,
+                provider=EnrichmentProvider.OPENALEX,
+                provider_record_id=f"openalex:{result.title}",
+                status=ExecutionStatus.COMPLETED,
+                title=result.title,
+            )
+            repository.replace_enrichments(
+                result.id,
+                [provider_record],
+                canonicalize_enrichment_records(result_record_id=result.id, records=[provider_record]),
+            )
+        return {}
+
+    monkeypatch.setattr("backend.application.run_executor.enrich_results", fake_enrich_results)
+
+    resume_downstream(run.id)
+
+    assert seen_ordinals == {
+        "Inserted First": 1,
+        "Inserted Second": 2,
+    }
 
 
 def test_replay_llm_artifacts_fails_cleanly_when_replayable_artifacts_are_missing(

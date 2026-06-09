@@ -6,9 +6,8 @@ import json
 import time
 from dataclasses import dataclass, field
 from typing import Any
-from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
-from urllib.request import Request, urlopen
+
+import httpx
 
 
 class HttpClientError(RuntimeError):
@@ -50,35 +49,59 @@ class JsonHttpClient:
         """Execute a JSON request with basic retry handling."""
 
         last_error: Exception | None = None
-        for attempt in range(max(1, self.max_retries) + 1):
+        attempts = max(0, self.max_retries) + 1
+        for attempt in range(attempts):
             try:
                 self._sleep_for_rate_limit()
-                request = self._build_request(
-                    method=method,
+                response = httpx.request(
+                    method=method.upper(),
                     url=url,
-                    params=params,
-                    headers=headers or {},
-                    payload=payload,
+                    params={
+                        key: value
+                        for key, value in (params or {}).items()
+                        if value is not None
+                    },
+                    headers=self._build_headers(headers or {}, payload=payload),
+                    json=payload,
+                    timeout=httpx.Timeout(self.timeout_seconds),
+                    follow_redirects=True,
                 )
-                with urlopen(request, timeout=self.timeout_seconds) as response:
-                    raw_body = response.read().decode("utf-8")
-                return self._decode_json(raw_body)
-            except HTTPError as exc:
-                if not self._is_retryable_http_status(exc.code) or attempt >= self.max_retries:
-                    body = exc.read().decode("utf-8", errors="replace")[:500]
+                if response.status_code >= 400:
+                    body = response.text[:500]
+                    if (
+                        self._is_retryable_http_status(response.status_code)
+                        and attempt < attempts - 1
+                    ):
+                        self._sleep_after_failure(
+                            attempt=attempt,
+                            retry_after=response.headers.get("Retry-After"),
+                        )
+                        last_error = HttpClientError(
+                            f"HTTP {response.status_code} for {url}: {body or response.reason_phrase}",
+                            status_code=response.status_code,
+                            url=url,
+                            response_text=body or response.reason_phrase,
+                        )
+                        continue
                     raise HttpClientError(
-                        f"HTTP {exc.code} for {url}: {body or exc.reason}",
-                        status_code=exc.code,
+                        f"HTTP {response.status_code} for {url}: {body or response.reason_phrase}",
+                        status_code=response.status_code,
                         url=url,
-                        response_text=body or str(exc.reason),
-                    ) from exc
-                retry_after = exc.headers.get("Retry-After")
-                self._sleep_after_failure(attempt=attempt, retry_after=retry_after)
-                last_error = exc
-            except URLError as exc:
-                if attempt >= self.max_retries:
+                        response_text=body or response.reason_phrase,
+                    )
+                return self._decode_json(response.text)
+            except httpx.TimeoutException as exc:
+                if attempt >= attempts - 1:
                     raise HttpClientError(
-                        f"Network error for {url}: {exc.reason}",
+                        f"Timeout after {self.timeout_seconds:g}s for {url}",
+                        url=url,
+                    ) from exc
+                self._sleep_after_failure(attempt=attempt, retry_after=None)
+                last_error = exc
+            except httpx.HTTPError as exc:
+                if attempt >= attempts - 1:
+                    raise HttpClientError(
+                        f"Network error for {url}: {exc}",
                         url=url,
                     ) from exc
                 self._sleep_after_failure(attempt=attempt, retry_after=None)
@@ -86,7 +109,7 @@ class JsonHttpClient:
             except HttpClientError:
                 raise
             except Exception as exc:  # pragma: no cover - defensive path
-                if attempt >= self.max_retries:
+                if attempt >= attempts - 1:
                     raise HttpClientError(
                         f"Unexpected HTTP client error for {url}: {exc}",
                         url=url,
@@ -98,27 +121,19 @@ class JsonHttpClient:
             raise HttpClientError(str(last_error))
         raise HttpClientError(f"Request failed for {url}")
 
-    def _build_request(
+    def _build_headers(
         self,
-        *,
-        method: str,
-        url: str,
-        params: dict[str, Any] | None,
         headers: dict[str, str],
         payload: dict[str, Any] | None,
-    ) -> Request:
-        query = urlencode({key: value for key, value in (params or {}).items() if value is not None})
-        full_url = f"{url}?{query}" if query else url
-        body = None
-        resolved_headers = {
+    ) -> dict[str, str]:
+        resolved_headers: dict[str, str] = {
             "Accept": "application/json",
             "User-Agent": self.user_agent,
             **headers,
         }
         if payload is not None:
-            body = json.dumps(payload).encode("utf-8")
             resolved_headers.setdefault("Content-Type", "application/json")
-        return Request(full_url, data=body, headers=resolved_headers, method=method.upper())
+        return resolved_headers
 
     def _decode_json(self, raw_body: str) -> dict[str, Any]:
         try:

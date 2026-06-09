@@ -31,7 +31,7 @@ from backend.adapters.scholarly import (
     map_semantic_scholar_paper,
 )
 from backend.application.openrouter_models import OpenRouterModelCatalogSnapshot, load_openrouter_model_catalog_snapshot
-from backend.application.run_recovery import track_active_run
+from backend.application.run_recovery import is_run_active, track_active_run
 from backend.application.run_artifacts import RunArtifactsWriter, get_run_artifacts_writer
 from backend.application.enrichment.providers import normalize_doi, normalize_title
 from backend.application.enrichment.service import enrich_results
@@ -104,6 +104,10 @@ class UnsupportedArtifactReplayError(ValueError):
 
 class UnsupportedModelRetryError(ValueError):
     """Raised when a targeted LLM model retry is not valid for the run state."""
+
+
+class UnsupportedDownstreamResumeError(ValueError):
+    """Raised when downstream enrichment/analysis cannot be resumed safely."""
 
 
 class OpenAlexSourceCollector:
@@ -1952,6 +1956,150 @@ def _replay_llm_audit_run_from_artifacts(
         external_llm_calls=0,
     )
     return replayed_run
+
+
+def resume_run_downstream(
+    *,
+    repository: Repository,
+    run: Run,
+    queries: Sequence[Query],
+) -> Run:
+    """Resume enrichment and analysis from already persisted result rows."""
+
+    if run.status == RunStatus.RUNNING and is_run_active(run.id):
+        raise UnsupportedDownstreamResumeError(
+            f"Run {run.id} is still active in this process",
+        )
+
+    results = repository.list_results_in_persistence_order(run.id)
+    if not results:
+        raise UnsupportedDownstreamResumeError(
+            f"Run {run.id} has no persisted result records to resume",
+        )
+
+    with track_active_run(run.id):
+        artifacts = get_run_artifacts_writer(run.id)
+        started_at = datetime.now(timezone.utc)
+        existing_enrichments = repository.list_enrichments_by_result(run.id)
+        pending_results = [
+            result
+            for result in results
+            if not existing_enrichments.get(result.id, ([], None))[0]
+        ]
+        result_ordinals = {
+            str(result.id): index
+            for index, result in enumerate(results, start=1)
+        }
+        completed_results = len(results) - len(pending_results)
+
+        _update_run_state(
+            repository=repository,
+            run=run,
+            status=RunStatus.RUNNING,
+            stage="enrichment",
+            progress_current=completed_results,
+            progress_total=len(results),
+            progress_message=(
+                f"Resuming enrichment: {completed_results}/{len(results)} records already processed"
+            ),
+            started_at=run.started_at or started_at,
+            completed_at=None,
+            finished_at=None,
+            error_message=None,
+            artifacts=artifacts,
+            query_count=len(queries),
+        )
+        artifacts.append_event(
+            stage="enrichment",
+            message="Downstream resume started",
+            total_results=len(results),
+            pending_results=len(pending_results),
+            completed_results=completed_results,
+        )
+
+        if pending_results:
+            enrich_results(
+                repository=repository,
+                results=pending_results,
+                progress_callback=lambda current, total, message: _update_run_state(
+                    repository=repository,
+                    run=run,
+                    stage="enrichment",
+                    progress_current=completed_results + current,
+                    progress_total=len(results),
+                    progress_message=(
+                        f"Resuming enrichment {completed_results + current}/{len(results)}"
+                    ),
+                    artifacts=artifacts,
+                    query_count=len(queries),
+                ),
+                artifacts=artifacts,
+                result_ordinals=result_ordinals,
+            )
+
+        _update_run_state(
+            repository=repository,
+            run=run,
+            stage="analysis",
+            progress_current=0,
+            progress_total=1,
+            progress_message="Computing metrics",
+            artifacts=artifacts,
+            query_count=len(queries),
+        )
+        from backend.application.analysis.service import build_run_analysis
+
+        analysis = build_run_analysis(repository=repository, run_id=run.id)
+        artifacts.write_analysis_payloads(analysis)
+        artifacts.append_event(
+            stage="analysis",
+            message="Analysis computed",
+            total_results=len(results),
+            source="downstream_resume",
+        )
+        artifacts.write_analysis_metadata(
+            source="downstream_resume",
+            generated_at=datetime.now(timezone.utc),
+            external_llm_calls=0,
+        )
+
+        if run.run_type == RunType.LLM_AUDIT:
+            final_status, error_message = _derive_llm_run_status_from_latest_calls(
+                repository=repository,
+                run=run,
+                queries=queries,
+            )
+        else:
+            final_status = RunStatus.COMPLETED
+            error_message = None
+
+        finished_at = datetime.now(timezone.utc)
+        _update_run_state(
+            repository=repository,
+            run=run,
+            status=final_status,
+            stage="done" if final_status != RunStatus.FAILED else "error",
+            progress_current=len(results),
+            progress_total=len(results),
+            progress_message=(
+                "Downstream resume completed"
+                if final_status != RunStatus.FAILED
+                else error_message
+            ),
+            error_message=error_message,
+            completed_at=finished_at,
+            finished_at=finished_at,
+            artifacts=artifacts,
+            query_count=len(queries),
+        )
+        artifacts.append_event(
+            stage="resume",
+            message="Downstream resume completed",
+            status=final_status.value,
+            total_results=len(results),
+            enriched_results=len(pending_results),
+        )
+        return repository.get_run(run.id)
 
 
 def retry_llm_model(
